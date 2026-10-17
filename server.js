@@ -291,7 +291,18 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const result = db.prepare('INSERT INTO users(username, password_hash, email) VALUES(?, ?, ?)').run(username, hash, email || null);
     const user = { id: Number(result.lastInsertRowid), username };
     if (email && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
-      await sendVerificationEmail(user.id, email);
+      try {
+        await sendVerificationEmail(user.id, email);
+      } catch (mailError) {
+        // Do not strand a newly-created account that cannot log in or request a
+        // verification resend when the first email fails to send.
+        const rollback = db.transaction(() => {
+          db.prepare('DELETE FROM email_verification_tokens WHERE user_id=? AND used_at IS NULL').run(user.id);
+          db.prepare('DELETE FROM users WHERE id=? AND email_verified_at IS NULL').run(user.id);
+        });
+        rollback();
+        throw mailError;
+      }
       return res.status(201).json({ verificationRequired: true, message: '账号已创建，请检查邮箱并完成验证。' });
     }
     createSession(user, res);
