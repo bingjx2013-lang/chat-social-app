@@ -23,6 +23,8 @@
       <form id="authForm" autocomplete="on">
         <label for="username">账号</label>
         <input id="username" name="username" minlength="3" maxlength="20" autocomplete="username" placeholder="3–20 位字母、数字或 _ -" required>
+        <label id="emailLabel" for="email" hidden>邮箱（启用邮箱验证时必填）</label>
+        <input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="name@example.com" hidden>
         <label for="password">密码</label>
         <input id="password" name="password" type="password" minlength="8" maxlength="72" autocomplete="current-password" placeholder="至少 8 位" required>
         <p id="authHint" class="hint">还没有账号？选择“注册账号”即可创建。</p>
@@ -38,6 +40,7 @@
       <div class="brand"><span class="brand-mark">聊</span><span class="brand-word">微聊</span></div>
       <div class="topbar-right">
         <span class="current-user"><span class="status-dot"></span><span id="currentUsername">—</span></span>
+        <button id="sessionsBtn" class="ghost-button" type="button">登录设备</button>
         <button id="logoutBtn" class="ghost-button" type="button">退出</button>
       </div>
     </header>
@@ -106,6 +109,19 @@
     <div class="video-stage"><video id="remoteVideo" autoplay playsinline></video><div id="remotePlaceholder" class="remote-placeholder"><div id="remoteCallAvatar" class="avatar call-avatar">友</div><strong id="remoteCallName">好友</strong><span id="callStatus">正在连接…</span></div><video id="localVideo" autoplay muted playsinline></video></div>
     <div class="call-actions"><button id="toggleMicBtn" class="call-action" type="button" title="静音/取消静音">🎙 <span>麦克风</span></button><button id="toggleCameraBtn" class="call-action" type="button" title="开关摄像头">▣ <span>摄像头</span></button><button id="hangupBtn" class="hangup-button" type="button">☎ <span>挂断</span></button></div>
   </section>
+
+  <div id="sessionsModal" class="modal-backdrop hidden">
+    <section class="incoming-card" role="dialog" aria-modal="true" aria-labelledby="sessionsTitle">
+      <h2 id="sessionsTitle">登录设备</h2>
+      <p>可以退出其他设备上的登录会话。</p>
+      <div id="sessionsList" class="requests-list"></div>
+      <div class="incoming-actions">
+        <button id="revokeOtherSessionsBtn" class="decline-button" type="button">退出其他设备</button>
+        <button id="closeSessionsBtn" class="accept-button" type="button">完成</button>
+      </div>
+      <p id="sessionsError" class="form-error" aria-live="polite"></p>
+    </section>
+  </div>
 
   <div id="incomingModal" class="modal-backdrop hidden">
     <section class="incoming-card" role="dialog" aria-modal="true" aria-labelledby="incomingTitle">

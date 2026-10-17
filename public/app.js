@@ -74,7 +74,10 @@ function setAuthMode(mode) {
   $('loginTab').classList.toggle('active', !registering);
   $('registerTab').classList.toggle('active', registering);
   $('authSubmit').textContent = registering ? '创建账号' : '登录';
-  $('authHint').textContent = registering ? '账号仅支持英文、数字、下划线和短横线。密码至少 8 位。' : '还没有账号？选择“注册账号”即可创建。';
+  $('authHint').textContent = registering ? '账号仅支持英文、数字、下划线和短横线。密码至少 8 位。启用邮箱验证时请填写邮箱。' : '还没有账号？选择“注册账号”即可创建。';
+  $('emailLabel').hidden = !registering;
+  $('email').hidden = !registering;
+  $('email').required = registering && document.body.dataset.emailRequired === 'true';
   $('password').autocomplete = registering ? 'new-password' : 'current-password';
   $('authError').textContent = '';
 }
@@ -96,7 +99,13 @@ async function handleAuth(event) {
     const username = $('username').value.trim();
     const password = $('password').value;
     const endpoint = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-    const result = await api(endpoint, { method: 'POST', body: JSON.stringify({ username, password }) });
+    const payload = { username, password };
+    if (state.authMode === 'register') payload.email = $('email').value.trim();
+    const result = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
+    if (result.verificationRequired) {
+      $('authError').textContent = result.message || '请检查邮箱并完成验证。';
+      return;
+    }
     state.user = result.user;
     $('password').value = '';
     await startApp();
@@ -581,6 +590,41 @@ function cleanupCall(notifyPeer) {
   state.queuedIce = []; state.incomingCall = null;
   state.callEnding = false;
 }
+async function openSessions() {
+  $('sessionsError').textContent = '';
+  $('sessionsList').textContent = '正在加载…';
+  $('sessionsModal').classList.remove('hidden');
+  try {
+    const result = await api('/api/sessions');
+    $('sessionsList').replaceChildren();
+    for (const session of result.sessions) {
+      if (session.revoked) continue;
+      const row = document.createElement('div');
+      row.className = 'request-row';
+      const label = document.createElement('span');
+      label.textContent = `${session.current ? '当前设备' : '其他设备'} · 创建于 ${new Date(session.createdAt * 1000).toLocaleString()}`;
+      row.append(label);
+      if (!session.current) {
+        const button = document.createElement('button');
+        button.type = 'button'; button.className = 'ghost-button'; button.textContent = '退出';
+        button.addEventListener('click', async () => {
+          try { await api(`/api/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' }); await openSessions(); }
+          catch (err) { $('sessionsError').textContent = err.message; }
+        });
+        row.append(button);
+      }
+      $('sessionsList').append(row);
+    }
+    if (!result.sessions.some(x => !x.revoked)) $('sessionsList').textContent = '没有有效会话。';
+  } catch (err) { $('sessionsError').textContent = err.message; }
+}
+async function revokeOtherSessions() {
+  try {
+    const result = await api('/api/sessions/revoke-others', { method: 'POST' });
+    toast(`已退出 ${result.revoked} 个其他设备。`);
+    await openSessions();
+  } catch (err) { $('sessionsError').textContent = err.message; }
+}
 async function logout(showMessage = true, message = '') {
   try {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
@@ -602,6 +646,9 @@ $('loginTab').addEventListener('click', () => setAuthMode('login'));
 $('registerTab').addEventListener('click', () => setAuthMode('register'));
 $('authForm').addEventListener('submit', handleAuth);
 $('logoutBtn').addEventListener('click', () => logout(true));
+$('sessionsBtn').addEventListener('click', openSessions);
+$('closeSessionsBtn').addEventListener('click', () => $('sessionsModal').classList.add('hidden'));
+$('revokeOtherSessionsBtn').addEventListener('click', revokeOtherSessions);
 $('refreshBtn').addEventListener('click', async () => { try { await Promise.all([loadFriends(), loadRequests()]); toast('联系人已刷新。'); } catch (e) { toast(e.message); } });
 $('searchForm').addEventListener('submit', searchUsers);
 $('requestsToggle').addEventListener('click', () => $('requestsList').classList.toggle('hidden'));
