@@ -10,16 +10,10 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
 const bcrypt = require('bcryptjs');
-const jwt = require('jsonwebtoken');
 const Database = require('better-sqlite3');
 const { Server } = require('socket.io');
 
 const isProduction = process.env.NODE_ENV === 'production';
-const AUTH_SECRET = process.env.AUTH_SECRET;
-if (isProduction && (!AUTH_SECRET || AUTH_SECRET.length < 32 || AUTH_SECRET.startsWith('replace-with-'))) {
-  throw new Error('Set AUTH_SECRET to a random value of at least 32 characters before production deployment.');
-}
-const secret = AUTH_SECRET || 'local-development-only-secret-change-before-deployment';
 const PORT = Number(process.env.PORT || 3000);
 const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, 'data'));
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
@@ -35,6 +29,14 @@ db.exec(`
     password_hash TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
+  CREATE TABLE IF NOT EXISTS auth_sessions (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at INTEGER NOT NULL,
+    expires_at INTEGER NOT NULL,
+    revoked_at INTEGER
+  );
+  CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at);
   CREATE TABLE IF NOT EXISTS friend_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -92,30 +94,80 @@ app.use(helmet({
 app.use(express.json({ limit: '32kb' }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
+// Cookie-based authentication requires same-origin protection for state-changing API calls.
+app.use('/api', (req, res, next) => {
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) return next();
+  const origin = req.get('origin');
+  if (!origin) return res.status(403).json({ error: '请求来源无法验证，请刷新页面后重试。' });
+  let parsed;
+  try { parsed = new URL(origin); } catch { return res.status(403).json({ error: '请求来源无效。' }); }
+  const expectedOrigin = `${req.protocol}://${req.get('host')}`;
+  if (parsed.origin !== expectedOrigin) return res.status(403).json({ error: '请求来源不受信任。' });
+  next();
+});
+
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: '尝试次数过多，请 15 分钟后再试。' } });
 const uploadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: '上传次数过多，请稍后再试。' } });
 
-function signToken(user) {
-  return jwt.sign({ sub: String(user.id), username: user.username }, secret, { expiresIn: '7d', issuer: 'chat-social-app' });
+const SESSION_COOKIE = 'chat_session';
+const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
+function sha256(value) {
+  return crypto.createHash('sha256').update(value).digest('hex');
 }
-function authFromHeader(req) {
-  const raw = req.headers.authorization || '';
-  const match = raw.match(/^Bearer\s+(.+)$/i);
-  if (!match) return null;
-  try {
-    const payload = jwt.verify(match[1], secret, { issuer: 'chat-social-app' });
-    const id = Number(payload.sub);
-    if (!Number.isSafeInteger(id) || id <= 0) return null;
-    const user = db.prepare('SELECT id, username FROM users WHERE id = ?').get(id);
-    return user || null;
-  } catch { return null; }
+function parseCookies(header = '') {
+  const result = Object.create(null);
+  for (const part of header.split(';')) {
+    const index = part.indexOf('=');
+    if (index <= 0) continue;
+    const key = part.slice(0, index).trim();
+    const value = part.slice(index + 1).trim();
+    try { result[key] = decodeURIComponent(value); } catch { /* Ignore malformed cookies. */ }
+  }
+  return result;
+}
+function setSessionCookie(res, token) {
+  const attributes = [
+    `${SESSION_COOKIE}=${encodeURIComponent(token)}`,
+    'Path=/',
+    'HttpOnly',
+    'SameSite=Strict',
+    `Max-Age=${SESSION_TTL_SECONDS}`
+  ];
+  if (isProduction) attributes.push('Secure');
+  res.setHeader('Set-Cookie', attributes.join('; '));
+}
+function clearSessionCookie(res) {
+  const attributes = [`${SESSION_COOKIE}=`, 'Path=/', 'HttpOnly', 'SameSite=Strict', 'Max-Age=0'];
+  if (isProduction) attributes.push('Secure');
+  res.setHeader('Set-Cookie', attributes.join('; '));
+}
+function createSession(user, res) {
+  const rawToken = crypto.randomBytes(32).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  const tokenHash = sha256(rawToken);
+  db.prepare('DELETE FROM auth_sessions WHERE expires_at<=? OR revoked_at IS NOT NULL').run(now);
+  db.prepare('INSERT INTO auth_sessions(token_hash, user_id, created_at, expires_at) VALUES(?, ?, ?, ?)')
+    .run(tokenHash, user.id, now, now + SESSION_TTL_SECONDS);
+  setSessionCookie(res, rawToken);
+  return tokenHash;
+}
+function getSession(req) {
+  const rawToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (!rawToken || rawToken.length > 200) return null;
+  const tokenHash = sha256(rawToken);
+  const now = Math.floor(Date.now() / 1000);
+  const session = db.prepare(`SELECT s.token_hash, s.user_id, u.username
+    FROM auth_sessions s JOIN users u ON u.id=s.user_id
+    WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?`).get(tokenHash, now);
+  return session || null;
 }
 function requireAuth(req, res, next) {
-  const user = authFromHeader(req);
-  if (!user) return res.status(401).json({ error: '登录状态已失效，请重新登录。' });
-  req.user = user;
+  const session = getSession(req);
+  if (!session) return res.status(401).json({ error: '登录状态已失效，请重新登录。' });
+  req.authSessionHash = session.token_hash;
+  req.user = { id: session.user_id, username: session.username };
   next();
 }
 function areFriends(a, b) {
@@ -177,7 +229,8 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const hash = await bcrypt.hash(password, 12);
     const result = db.prepare('INSERT INTO users(username, password_hash) VALUES(?, ?)').run(username, hash);
     const user = { id: Number(result.lastInsertRowid), username };
-    res.status(201).json({ token: signToken(user), user });
+    createSession(user, res);
+    res.status(201).json({ user });
   } catch (err) {
     if (String(err.code).includes('SQLITE_CONSTRAINT')) return res.status(409).json({ error: '这个账号已经被注册了。' });
     console.error('register error:', err);
@@ -188,9 +241,24 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   const user = db.prepare('SELECT id, username, password_hash FROM users WHERE username = ? COLLATE NOCASE').get(username);
-  const ok = user ? await bcrypt.compare(password, user.password_hash) : false;
-  if (!ok) return res.status(401).json({ error: '账号或密码不正确。' });
-  res.json({ token: signToken(user), user: { id: user.id, username: user.username } });
+  // Perform a comparable password-hash operation for unknown usernames to reduce account enumeration by timing.
+  const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+  const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
+  if (!user || !ok) return res.status(401).json({ error: '账号或密码不正确。' });
+  createSession(user, res);
+  res.json({ user: { id: user.id, username: user.username } });
+});
+app.post('/api/auth/logout', (req, res) => {
+  const rawToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
+  if (rawToken && rawToken.length <= 200) {
+    const tokenHash = sha256(rawToken);
+    db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL')
+      .run(Math.floor(Date.now() / 1000), tokenHash);
+    // Immediately disconnect sockets authenticated with this exact session.
+    io.in(`session:${tokenHash}`).disconnectSockets(true);
+  }
+  clearSessionCookie(res);
+  res.json({ ok: true });
 });
 app.get('/api/me', requireAuth, (req, res) => res.json({ user: req.user }));
 
@@ -311,22 +379,39 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: errorText(err) });
 });
 
-// Each socket is authenticated independently; clients cannot choose their own sender ID.
+// Socket.IO authenticates against the same revocable server-side session as HTTP.
 io.use((socket, next) => {
   try {
-    const raw = socket.handshake.auth?.token;
-    if (!raw) return next(new Error('请先登录。'));
-    const payload = jwt.verify(raw, secret, { issuer: 'chat-social-app' });
-    const id = Number(payload.sub);
-    const user = db.prepare('SELECT id, username FROM users WHERE id=?').get(id);
-    if (!user) return next(new Error('登录状态无效。'));
-    socket.user = user;
+    const origin = socket.handshake.headers.origin;
+    const host = socket.handshake.headers.host;
+    const forwardedProto = String(socket.handshake.headers['x-forwarded-proto'] || '').split(',')[0].trim();
+    const protocol = forwardedProto || (isProduction ? 'https' : 'http');
+    if (!origin || !host || origin !== `${protocol}://${host}`) return next(new Error('请求来源不受信任。'));
+    const rawToken = parseCookies(socket.handshake.headers.cookie || '')[SESSION_COOKIE];
+    if (!rawToken || rawToken.length > 200) return next(new Error('请先登录。'));
+    const tokenHash = sha256(rawToken);
+    const now = Math.floor(Date.now() / 1000);
+    const session = db.prepare(`SELECT s.token_hash, s.user_id, u.username
+      FROM auth_sessions s JOIN users u ON u.id=s.user_id
+      WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?`).get(tokenHash, now);
+    if (!session) return next(new Error('登录状态已失效，请重新登录。'));
+    socket.user = { id: session.user_id, username: session.username };
+    socket.sessionHash = tokenHash;
     next();
   } catch { next(new Error('登录状态已失效，请重新登录。')); }
 });
 io.on('connection', (socket) => {
   const me = socket.user;
   socket.join(userRoom(me.id));
+  socket.join(`session:${socket.sessionHash}`);
+  // Enforce expiry/revocation even when a tab keeps its real-time connection open.
+  const sessionCheck = setInterval(() => {
+    const now = Math.floor(Date.now() / 1000);
+    const valid = db.prepare('SELECT 1 FROM auth_sessions WHERE token_hash=? AND revoked_at IS NULL AND expires_at>?')
+      .get(socket.sessionHash, now);
+    if (!valid) socket.disconnect(true);
+  }, 60_000);
+  socket.on('disconnect', () => clearInterval(sessionCheck));
 
   socket.on('message:send', (data, ack) => {
     const reply = typeof ack === 'function' ? ack : () => {};
@@ -386,5 +471,4 @@ io.on('connection', (socket) => {
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`Chat Social App running on http://localhost:${PORT}`);
-  if (!isProduction) console.log('Development mode: set a strong AUTH_SECRET before deploying publicly.');
 });
