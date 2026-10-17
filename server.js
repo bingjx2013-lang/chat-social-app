@@ -27,6 +27,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE COLLATE NOCASE,
     password_hash TEXT NOT NULL,
+    email TEXT UNIQUE COLLATE NOCASE,
+    email_verified_at TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -37,6 +39,23 @@ db.exec(`
     revoked_at INTEGER
   );
   CREATE INDEX IF NOT EXISTS idx_auth_sessions_user ON auth_sessions(user_id, expires_at);
+  CREATE TABLE IF NOT EXISTS login_attempts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_key TEXT NOT NULL,
+    ip_key TEXT NOT NULL,
+    attempted_at INTEGER NOT NULL,
+    succeeded INTEGER NOT NULL DEFAULT 0
+  );
+  CREATE INDEX IF NOT EXISTS idx_login_attempts_account_time ON login_attempts(account_key, attempted_at);
+  CREATE INDEX IF NOT EXISTS idx_login_attempts_ip_time ON login_attempts(ip_key, attempted_at);
+  CREATE TABLE IF NOT EXISTS email_verification_tokens (
+    token_hash TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    email TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    used_at INTEGER,
+    created_at INTEGER NOT NULL
+  );
   CREATE TABLE IF NOT EXISTS friend_requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     from_user INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -69,6 +88,12 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_messages_pair_time ON messages(sender_id, receiver_id, id);
 `);
+
+// Forward-compatible additive migrations for existing SQLite databases.
+const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(row => row.name));
+if (!userColumns.has('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
+if (!userColumns.has('email_verified_at')) db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
 
 const app = express();
 const server = http.createServer(app);
@@ -111,6 +136,23 @@ const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHea
 const uploadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: '上传次数过多，请稍后再试。' } });
 
+const emailLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 5, standardHeaders: 'draft-8', legacyHeaders: false,
+  message: { error: '邮件请求过于频繁，请稍后再试。' } });
+function accountKey(value) { return sha256(String(value || '').trim().toLowerCase()).slice(0, 32); }
+function clientIpKey(req) { return sha256(String(req.ip || req.socket?.remoteAddress || 'unknown')).slice(0, 32); }
+function loginLockStatus(account, ip) {
+  const since = Math.floor(Date.now() / 1000) - 15 * 60;
+  const accountFails = db.prepare('SELECT COUNT(*) AS n FROM login_attempts WHERE account_key=? AND attempted_at>? AND succeeded=0').get(account, since).n;
+  const ipFails = db.prepare('SELECT COUNT(*) AS n FROM login_attempts WHERE ip_key=? AND attempted_at>? AND succeeded=0').get(ip, since).n;
+  return { locked: accountFails >= 8 || ipFails >= 20, accountFails, ipFails };
+}
+function recordLoginAttempt(account, ip, succeeded) {
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('INSERT INTO login_attempts(account_key, ip_key, attempted_at, succeeded) VALUES(?,?,?,?)')
+    .run(account, ip, now, succeeded ? 1 : 0);
+  db.prepare('DELETE FROM login_attempts WHERE attempted_at<?').run(now - 7 * 24 * 60 * 60);
+}
+
 const SESSION_COOKIE = 'chat_session';
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 function sha256(value) {
@@ -152,6 +194,27 @@ function createSession(user, res) {
     .run(tokenHash, user.id, now, now + SESSION_TTL_SECONDS);
   setSessionCookie(res, rawToken);
   return tokenHash;
+}
+async function sendVerificationEmail(userId, email) {
+  const required = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'EMAIL_FROM'];
+  if (required.some(key => !process.env[key])) {
+    throw new Error('邮箱验证已启用，但 SMTP 邮件服务尚未配置。');
+  }
+  const nodemailer = require('nodemailer');
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST,
+    port: Number(process.env.SMTP_PORT),
+    secure: process.env.SMTP_SECURE === 'true',
+    auth: { user: process.env.SMTP_USER, pass: process.env.SMTP_PASS }
+  });
+  const rawToken = crypto.randomBytes(32).toString('base64url');
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('INSERT INTO email_verification_tokens(token_hash,user_id,email,expires_at,created_at) VALUES(?,?,?,?,?)')
+    .run(sha256(rawToken), userId, email, now + 30 * 60, now);
+  const base = process.env.PUBLIC_BASE_URL || '';
+  if (!/^https:\/\//i.test(base)) throw new Error('启用邮箱验证时，PUBLIC_BASE_URL 必须是 HTTPS 地址。');
+  const link = `${base.replace(/\/$/, '')}/api/auth/email-verification/confirm?token=${encodeURIComponent(rawToken)}`;
+  await transporter.sendMail({ from: process.env.EMAIL_FROM, to: email, subject: '微聊邮箱验证', text: `请在 30 分钟内打开此链接验证邮箱：\n${link}` });
 }
 function getSession(req) {
   const rawToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
@@ -219,20 +282,23 @@ app.get('/api/config', requireAuth, (req, res) => {
 app.post('/api/auth/register', authLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
-  if (!/^[a-zA-Z0-9_-]{3,20}$/.test(username)) {
-    return res.status(400).json({ error: '账号需为 3–20 位，只能包含英文字母、数字、下划线和短横线。' });
-  }
-  if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) {
-    return res.status(400).json({ error: '密码长度需为 8–72 字节。' });
-  }
+  const email = String(req.body?.email || '').trim().toLowerCase();
+  if (!/^[a-zA-Z0-9_-]{3,20}$/.test(username)) return res.status(400).json({ error: '账号需为 3–20 位，只能包含英文字母、数字、下划线和短横线。' });
+  if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: '密码长度需为 8–72 字节。' });
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: '邮箱格式不正确。' });
+  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !email) return res.status(400).json({ error: '请填写邮箱后注册。' });
   try {
     const hash = await bcrypt.hash(password, 12);
-    const result = db.prepare('INSERT INTO users(username, password_hash) VALUES(?, ?)').run(username, hash);
+    const result = db.prepare('INSERT INTO users(username, password_hash, email) VALUES(?, ?, ?)').run(username, hash, email || null);
     const user = { id: Number(result.lastInsertRowid), username };
+    if (email && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
+      await sendVerificationEmail(user.id, email);
+      return res.status(201).json({ verificationRequired: true, message: '账号已创建，请检查邮箱并完成验证。' });
+    }
     createSession(user, res);
     res.status(201).json({ user });
   } catch (err) {
-    if (String(err.code).includes('SQLITE_CONSTRAINT')) return res.status(409).json({ error: '这个账号已经被注册了。' });
+    if (String(err.code).includes('SQLITE_CONSTRAINT')) return res.status(409).json({ error: '账号或邮箱已经被使用。' });
     console.error('register error:', err);
     res.status(500).json({ error: '注册失败，请稍后重试。' });
   }
@@ -240,11 +306,25 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
-  const user = db.prepare('SELECT id, username, password_hash FROM users WHERE username = ? COLLATE NOCASE').get(username);
-  // Perform a comparable password-hash operation for unknown usernames to reduce account enumeration by timing.
+  const account = accountKey(username);
+  const ip = clientIpKey(req);
+  const lock = loginLockStatus(account, ip);
+  const user = db.prepare('SELECT id, username, password_hash, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
-  if (!user || !ok) return res.status(401).json({ error: '账号或密码不正确。' });
+  if (lock.locked) {
+    recordLoginAttempt(account, ip, false);
+    return res.status(429).json({ error: '登录尝试过多，请稍后再试。' });
+  }
+  if (!user || !ok) {
+    recordLoginAttempt(account, ip, false);
+    return res.status(401).json({ error: '账号或密码不正确。' });
+  }
+  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.email_verified_at) {
+    recordLoginAttempt(account, ip, false);
+    return res.status(403).json({ error: '请先完成邮箱验证。' });
+  }
+  recordLoginAttempt(account, ip, true);
   createSession(user, res);
   res.json({ user: { id: user.id, username: user.username } });
 });
@@ -260,7 +340,58 @@ app.post('/api/auth/logout', (req, res) => {
   clearSessionCookie(res);
   res.json({ ok: true });
 });
-app.get('/api/me', requireAuth, (req, res) => res.json({ user: req.user }));
+app.get('/api/sessions', requireAuth, (req, res) => {
+  const sessions = db.prepare(`SELECT token_hash, created_at, expires_at, revoked_at FROM auth_sessions
+    WHERE user_id=? ORDER BY created_at DESC`).all(req.user.id).map((row, index) => ({
+      id: row.token_hash, current: row.token_hash === req.authSessionHash,
+      createdAt: row.created_at, expiresAt: row.expires_at, revoked: !!row.revoked_at,
+      label: row.token_hash === req.authSessionHash ? '当前设备' : `登录设备 ${index + 1}`
+    }));
+  res.json({ sessions });
+});
+app.delete('/api/sessions/:id', requireAuth, (req, res) => {
+  const id = String(req.params.id || '');
+  const result = db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE token_hash=? AND user_id=? AND revoked_at IS NULL')
+    .run(Math.floor(Date.now() / 1000), id, req.user.id);
+  if (!result.changes) return res.status(404).json({ error: '会话不存在或已退出。' });
+  io.in(`session:${id}`).disconnectSockets(true);
+  if (id === req.authSessionHash) clearSessionCookie(res);
+  res.json({ ok: true, current: id === req.authSessionHash });
+});
+app.post('/api/sessions/revoke-others', requireAuth, (req, res) => {
+  const now = Math.floor(Date.now() / 1000);
+  const rows = db.prepare('SELECT token_hash FROM auth_sessions WHERE user_id=? AND revoked_at IS NULL AND token_hash<>?')
+    .all(req.user.id, req.authSessionHash);
+  db.prepare('UPDATE auth_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL AND token_hash<>?')
+    .run(now, req.user.id, req.authSessionHash);
+  for (const row of rows) io.in(`session:${row.token_hash}`).disconnectSockets(true);
+  res.json({ ok: true, revoked: rows.length });
+});
+app.post('/api/auth/email-verification/request', requireAuth, emailLimiter, async (req, res) => {
+  const user = db.prepare('SELECT id, username, email, email_verified_at FROM users WHERE id=?').get(req.user.id);
+  if (!user.email) return res.status(400).json({ error: '请先绑定邮箱。' });
+  if (user.email_verified_at) return res.json({ ok: true, verified: true });
+  try { await sendVerificationEmail(user.id, user.email); res.json({ ok: true, message: '验证邮件已发送。' }); }
+  catch (err) { console.error('email verification send failed:', err.message); res.status(503).json({ error: '邮件服务暂不可用，请稍后重试。' }); }
+});
+app.get('/api/auth/email-verification/confirm', (req, res) => {
+  const token = String(req.query.token || '');
+  if (token.length < 30 || token.length > 200) return res.status(400).send('验证链接无效。');
+  const now = Math.floor(Date.now() / 1000);
+  const row = db.prepare('SELECT * FROM email_verification_tokens WHERE token_hash=? AND used_at IS NULL AND expires_at>?').get(sha256(token), now);
+  if (!row) return res.status(400).send('验证链接已失效或已使用。');
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE users SET email=?, email_verified_at=datetime(\'now\') WHERE id=?').run(row.email, row.user_id);
+    db.prepare('UPDATE email_verification_tokens SET used_at=? WHERE token_hash=?').run(now, row.token_hash);
+    db.prepare('UPDATE email_verification_tokens SET used_at=? WHERE user_id=? AND used_at IS NULL').run(now, row.user_id);
+  });
+  try { tx(); res.send('邮箱验证成功。你可以返回微聊登录。'); }
+  catch { res.status(409).send('邮箱已被其他账号使用，请联系管理员。'); }
+});
+app.get('/api/me', requireAuth, (req, res) => {
+  const row = db.prepare('SELECT email, email_verified_at FROM users WHERE id=?').get(req.user.id);
+  res.json({ user: { ...req.user, email: row.email, emailVerified: !!row.email_verified_at } });
+});
 
 app.get('/api/users/search', requireAuth, (req, res) => {
   const q = String(req.query.q || '').trim().replace(/[\\%_]/g, '');
@@ -325,6 +456,28 @@ app.get('/api/messages/:friendId', requireAuth, (req, res) => {
   res.json({ messages: rows.map(safeMessage) });
 });
 
+function detectSafeMime(filePath, claimedMime, originalName) {
+  const fd = fs.openSync(filePath, 'r');
+  const buf = Buffer.alloc(16);
+  let bytes = 0;
+  try { bytes = fs.readSync(fd, buf, 0, buf.length, 0); } finally { fs.closeSync(fd); }
+  const b = buf.subarray(0, bytes);
+  const ext = path.extname(originalName || '').toLowerCase();
+  const signatures = [
+    { mime: 'image/png', ok: b.length >= 8 && b.subarray(0,8).equals(Buffer.from([137,80,78,71,13,10,26,10])) },
+    { mime: 'image/jpeg', ok: b.length >= 3 && b[0]===0xff && b[1]===0xd8 && b[2]===0xff },
+    { mime: 'image/gif', ok: b.length >= 6 && ['GIF87a','GIF89a'].includes(b.subarray(0,6).toString()) },
+    { mime: 'video/mp4', ok: b.length >= 8 && b.subarray(4,8).toString() === 'ftyp' },
+    { mime: 'application/pdf', ok: b.subarray(0,5).toString() === '%PDF-' },
+    { mime: 'application/zip', ok: b.length >= 4 && b[0]===0x50 && b[1]===0x4b && [0x03,0x05,0x07].includes(b[2]) },
+  ];
+  const match = signatures.find(x => x.ok);
+  if (match) return match.mime;
+  const textLike = b.length > 0 && b.every(c => c === 9 || c === 10 || c === 13 || (c >= 32 && c < 127));
+  if (textLike && ext === '.txt' && claimedMime === 'text/plain') return 'text/plain';
+  return 'application/octet-stream';
+}
+
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => cb(null, UPLOAD_DIR),
   filename: (_req, _file, cb) => cb(null, crypto.randomUUID())
@@ -348,7 +501,12 @@ app.post('/api/upload', requireAuth, uploadLimiter, (req, res, next) => {
     }
     const id = crypto.randomUUID();
     const originalName = path.basename(String(req.file.originalname || 'file')).slice(0, 240) || 'file';
-    const mimeType = String(req.file.mimetype || 'application/octet-stream').slice(0, 120);
+    const mimeType = detectSafeMime(req.file.path, req.file.mimetype, originalName);
+    const riskyExt = new Set(['.html','.htm','.svg','.js','.mjs','.css','.xml','.xhtml','.php','.exe','.dll','.bat','.cmd','.com','.msi','.sh','.ps1','.apk','.jar','.scr','.vbs']);
+    if (riskyExt.has(path.extname(originalName).toLowerCase()) || (mimeType === 'application/octet-stream' && req.file.mimetype !== 'application/octet-stream')) {
+      fs.rm(req.file.path, { force: true }, () => {});
+      return res.status(400).json({ error: '文件类型无法安全确认，请发送常见图片、视频、PDF、ZIP 或 TXT 文件。' });
+    }
     db.prepare(`INSERT INTO uploads(id, stored_name, original_name, mime_type, size, uploaded_by, receiver_id)
       VALUES(?, ?, ?, ?, ?, ?, ?)`).run(id, req.file.filename, originalName, mimeType, req.file.size, req.user.id, receiverId);
     res.status(201).json({ attachment: { id, name: originalName, mimeType, size: req.file.size } });
@@ -362,6 +520,7 @@ app.get('/api/files/:id', requireAuth, (req, res) => {
   const fullPath = path.join(UPLOAD_DIR, path.basename(file.stored_name));
   if (!fs.existsSync(fullPath)) return res.status(404).json({ error: '文件已丢失，请联系管理员。' });
   res.setHeader('Content-Type', file.mime_type || 'application/octet-stream');
+  res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(path.basename(file.original_name || 'file'))}`);
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Cache-Control', 'private, no-store');
   res.sendFile(fullPath);

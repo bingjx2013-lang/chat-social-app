@@ -79,3 +79,7 @@ public/app.js        聊天、上传和 WebRTC 客户端逻辑
 - 限制上传大小并拒绝常见可执行文件扩展名；Helmet 设置常用安全响应头。
 
 在有真实用户和公开访问量之前，仍应完成正式安全测试与隐私评估。
+
+
+## Security Stage 2 candidate
+See `SECURITY-STAGE2-NOTES.md` for login throttling, session management, email verification, file validation, and backup instructions. Configure SMTP before enabling email verification. Run `npm run backup` for a local consistent database + uploads backup.
