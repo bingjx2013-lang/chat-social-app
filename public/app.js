@@ -74,10 +74,10 @@ function setAuthMode(mode) {
   $('loginTab').classList.toggle('active', !registering);
   $('registerTab').classList.toggle('active', registering);
   $('authSubmit').textContent = registering ? '创建账号' : '登录';
-  $('authHint').textContent = registering ? '账号仅支持英文、数字、下划线和短横线。密码至少 8 位。启用邮箱验证时请填写邮箱。' : '还没有账号？选择“注册账号”即可创建。';
+  $('authHint').textContent = registering ? '账号仅支持英文、数字、下划线和短横线。密码至少 8 位。邮箱选填；填写邮箱后可能需要验证。' : '还没有账号？选择“注册账号”即可创建。';
   $('emailLabel').hidden = !registering;
   $('email').hidden = !registering;
-  $('email').required = registering && document.body.dataset.emailRequired === 'true';
+  $('email').required = false;
   $('password').autocomplete = registering ? 'new-password' : 'current-password';
   $('authError').textContent = '';
 }
