@@ -308,13 +308,15 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const account = accountKey(username);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
-  const user = db.prepare('SELECT id, username, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
-  const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
-  const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
+  // Check the persistent lock before bcrypt work: otherwise a locked account/IP can
+  // still force expensive password hashes on every request and waste server CPU.
   if (lock.locked) {
     recordLoginAttempt(account, ip, false);
     return res.status(429).json({ error: '登录尝试过多，请稍后再试。' });
   }
+  const user = db.prepare('SELECT id, username, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
+  const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
+  const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
   if (!user || !ok) {
     recordLoginAttempt(account, ip, false);
     return res.status(401).json({ error: '账号或密码不正确。' });
