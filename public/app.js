@@ -2,7 +2,6 @@
 
 const $ = (id) => document.getElementById(id);
 const state = {
-  token: localStorage.getItem('chat_token') || '',
   user: null,
   socket: null,
   friends: [],
@@ -55,7 +54,6 @@ function formatDay(timestamp) {
 }
 async function api(url, options = {}) {
   const headers = new Headers(options.headers || {});
-  if (state.token) headers.set('Authorization', `Bearer ${state.token}`);
   const hasBody = options.body !== undefined && options.body !== null;
   if (hasBody && !(options.body instanceof FormData) && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   const response = await fetch(url, { ...options, headers });
@@ -64,7 +62,7 @@ async function api(url, options = {}) {
   if (contentType.includes('application/json')) body = await response.json();
   else body = await response.text();
   if (!response.ok) {
-    if (response.status === 401 && state.token) logout(false, '登录已过期，请重新登录。');
+    if (response.status === 401 && state.user) logout(false, '登录已过期，请重新登录。');
     const message = body && typeof body === 'object' ? body.error : String(body || '请求失败');
     throw new Error(message || '请求失败');
   }
@@ -99,9 +97,7 @@ async function handleAuth(event) {
     const password = $('password').value;
     const endpoint = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
     const result = await api(endpoint, { method: 'POST', body: JSON.stringify({ username, password }) });
-    state.token = result.token;
     state.user = result.user;
-    localStorage.setItem('chat_token', state.token);
     $('password').value = '';
     await startApp();
   } catch (err) {
@@ -131,7 +127,7 @@ async function startApp() {
 function connectSocket() {
   if (state.socket) state.socket.disconnect();
   if (typeof io !== 'function') return toast('实时消息组件加载失败，请刷新页面。', 5000);
-  state.socket = io({ auth: { token: state.token } });
+  state.socket = io();
   state.socket.on('connect', () => $('chatFriendStatus').textContent = state.selectedFriend ? '实时消息已连接' : '微聊联系人');
   state.socket.on('disconnect', () => {
     if (state.selectedFriend) $('chatFriendStatus').textContent = '连接中断，正在重连…';
@@ -355,7 +351,7 @@ function appendMessage(message, scroll = true) {
 function scrollMessages() { const list = $('messageList'); if (list) list.scrollTop = list.scrollHeight; }
 async function loadAttachment(attachment) {
   if (state.attachmentUrls.has(attachment.id)) return state.attachmentUrls.get(attachment.id);
-  const response = await fetch(`/api/files/${encodeURIComponent(attachment.id)}`, { headers: { Authorization: `Bearer ${state.token}` } });
+  const response = await fetch(`/api/files/${encodeURIComponent(attachment.id)}`, { credentials: 'same-origin' });
   if (!response.ok) throw new Error(response.status === 403 ? '没有权限查看此附件' : '附件下载失败');
   const url = URL.createObjectURL(await response.blob());
   state.attachmentUrls.set(attachment.id, url);
@@ -585,11 +581,13 @@ function cleanupCall(notifyPeer) {
   state.queuedIce = []; state.incomingCall = null;
   state.callEnding = false;
 }
-function logout(showMessage = true, message = '') {
+async function logout(showMessage = true, message = '') {
+  try {
+    await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+  } catch { /* Clear local UI even if the network is unavailable. */ }
   if (state.socket) { state.socket.disconnect(); state.socket = null; }
   cleanupCall(false);
-  state.token = ''; state.user = null; state.friends = []; state.selectedFriend = null;
-  localStorage.removeItem('chat_token');
+  state.user = null; state.friends = []; state.selectedFriend = null;
   for (const url of state.attachmentUrls.values()) URL.revokeObjectURL(url);
   state.attachmentUrls.clear();
   $('searchResults').classList.add('hidden'); $('requestsList').classList.add('hidden');
@@ -635,5 +633,4 @@ $('toggleCameraBtn').addEventListener('click', () => {
   $('toggleCameraBtn').querySelector('span').textContent = track.enabled ? '摄像头' : '已关闭';
 });
 
-if (state.token) startApp();
-else { setAuthMode('login'); showAuth(); }
+startApp();
