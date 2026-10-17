@@ -322,7 +322,8 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   // Check the persistent lock before bcrypt work: otherwise a locked account/IP can
   // still force expensive password hashes on every request and waste server CPU.
   if (lock.locked) {
-    recordLoginAttempt(account, ip, false);
+    // Do not extend the 15-minute lock just because requests arrive while locked.
+    // The separate HTTP rate limiter still limits repeated requests from one IP.
     return res.status(429).json({ error: '登录尝试过多，请稍后再试。' });
   }
   const user = db.prepare('SELECT id, username, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
