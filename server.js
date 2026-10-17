@@ -286,7 +286,6 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
   if (!/^[a-zA-Z0-9_-]{3,20}$/.test(username)) return res.status(400).json({ error: '账号需为 3–20 位，只能包含英文字母、数字、下划线和短横线。' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: '密码长度需为 8–72 字节。' });
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: '邮箱格式不正确。' });
-  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !email) return res.status(400).json({ error: '请填写邮箱后注册。' });
   try {
     const hash = await bcrypt.hash(password, 12);
     const result = db.prepare('INSERT INTO users(username, password_hash, email) VALUES(?, ?, ?)').run(username, hash, email || null);
@@ -309,7 +308,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const account = accountKey(username);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
-  const user = db.prepare('SELECT id, username, password_hash, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
+  const user = db.prepare('SELECT id, username, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
   if (lock.locked) {
@@ -320,7 +319,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
     recordLoginAttempt(account, ip, false);
     return res.status(401).json({ error: '账号或密码不正确。' });
   }
-  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && !user.email_verified_at) {
+  if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && user.email && !user.email_verified_at) {
     recordLoginAttempt(account, ip, false);
     return res.status(403).json({ error: '请先完成邮箱验证。' });
   }

@@ -6,7 +6,7 @@
 1. 登录失败记录：SQLite 记录账号哈希与 IP 哈希，15 分钟内账号失败达到 8 次或 IP 达到 20 次时临时拒绝登录；数据最多保留 7 天。仍保留 IP rate limiter。
 2. 会话设备管理：新增列出会话、撤销单个其他会话、退出所有其他设备的 API，并添加简单前端入口。
 3. 文件安全：拒绝危险扩展名，基于文件头识别 PNG/JPEG/GIF/MP4/PDF/ZIP 等常见格式；未知类型降为 application/octet-stream 或拒绝可疑声明；下载统一使用 attachment 与 nosniff。不是完整的反病毒扫描。
-4. 邮箱验证：新增邮箱列、一次性 30 分钟验证令牌与 Nodemailer SMTP 发送；需配置 SMTP_*、EMAIL_FROM、PUBLIC_BASE_URL 和 REQUIRE_EMAIL_VERIFICATION=true。若启用，注册需要邮箱。已有账号需自行完成邮箱绑定/验证迁移流程，目前没有管理后台。
+4. 邮箱验证：新增邮箱列、一次性 30 分钟验证令牌与 Nodemailer SMTP 发送；需配置 SMTP_*、EMAIL_FROM、PUBLIC_BASE_URL 和 REQUIRE_EMAIL_VERIFICATION=true。邮箱为选填；若用户填写邮箱且启用验证，注册后需验证邮箱；未填写邮箱的账号可直接注册和登录。已有账号需自行完成邮箱绑定/验证迁移流程，目前没有管理后台。
 5. 数据备份：`npm run backup` 会对 SQLite 做一致性备份并复制 uploads 目录。备份目录默认在 DATA_DIR/backups，生产环境应另行复制到独立存储；不能只把备份留在同一磁盘。
 
 ## 需要的环境变量
