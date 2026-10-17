@@ -520,8 +520,15 @@ app.post('/api/upload', requireAuth, uploadLimiter, (req, res, next) => {
       fs.rm(req.file.path, { force: true }, () => {});
       return res.status(400).json({ error: '文件类型无法安全确认，请发送常见图片、视频、PDF、ZIP 或 TXT 文件。' });
     }
-    db.prepare(`INSERT INTO uploads(id, stored_name, original_name, mime_type, size, uploaded_by, receiver_id)
-      VALUES(?, ?, ?, ?, ?, ?, ?)`).run(id, req.file.filename, originalName, mimeType, req.file.size, req.user.id, receiverId);
+    try {
+      db.prepare(`INSERT INTO uploads(id, stored_name, original_name, mime_type, size, uploaded_by, receiver_id)
+        VALUES(?, ?, ?, ?, ?, ?, ?)`).run(id, req.file.filename, originalName, mimeType, req.file.size, req.user.id, receiverId);
+    } catch (dbError) {
+      // If metadata persistence fails, remove the just-uploaded bytes to avoid
+      // orphan files accumulating on the persistent disk.
+      fs.rm(req.file.path, { force: true }, () => {});
+      throw dbError;
+    }
     res.status(201).json({ attachment: { id, name: originalName, mimeType, size: req.file.size } });
   });
 });
