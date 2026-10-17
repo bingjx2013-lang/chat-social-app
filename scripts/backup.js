@@ -28,6 +28,10 @@ fs.mkdirSync(targetDir, { recursive: false });
     `Created: ${new Date().toISOString()}\nDatabase: app.sqlite\nUploads: ${fs.existsSync(uploads) ? 'included' : 'directory missing'}\n`);
   console.log(`Backup completed: ${targetDir}`);
 })().catch(err => {
+  // A failed backup must never be mistaken for a complete one. Remove the
+  // partial directory so only backups with a manifest remain as valid snapshots.
+  try { fs.rmSync(targetDir, { recursive: true, force: true }); }
+  catch (cleanupErr) { console.error('Could not remove partial backup:', cleanupErr.message); }
   console.error('Backup failed:', err.message);
   process.exitCode = 1;
 });

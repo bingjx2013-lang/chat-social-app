@@ -291,7 +291,18 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
     const result = db.prepare('INSERT INTO users(username, password_hash, email) VALUES(?, ?, ?)').run(username, hash, email || null);
     const user = { id: Number(result.lastInsertRowid), username };
     if (email && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
-      await sendVerificationEmail(user.id, email);
+      try {
+        await sendVerificationEmail(user.id, email);
+      } catch (mailError) {
+        // Do not strand a newly-created account that cannot log in or request a
+        // verification resend when the first email fails to send.
+        const rollback = db.transaction(() => {
+          db.prepare('DELETE FROM email_verification_tokens WHERE user_id=? AND used_at IS NULL').run(user.id);
+          db.prepare('DELETE FROM users WHERE id=? AND email_verified_at IS NULL').run(user.id);
+        });
+        rollback();
+        throw mailError;
+      }
       return res.status(201).json({ verificationRequired: true, message: '账号已创建，请检查邮箱并完成验证。' });
     }
     createSession(user, res);
@@ -308,13 +319,16 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const account = accountKey(username);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
+  // Check the persistent lock before bcrypt work: otherwise a locked account/IP can
+  // still force expensive password hashes on every request and waste server CPU.
+  if (lock.locked) {
+    // Do not extend the 15-minute lock just because requests arrive while locked.
+    // The separate HTTP rate limiter still limits repeated requests from one IP.
+    return res.status(429).json({ error: '登录尝试过多，请稍后再试。' });
+  }
   const user = db.prepare('SELECT id, username, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
-  if (lock.locked) {
-    recordLoginAttempt(account, ip, false);
-    return res.status(429).json({ error: '登录尝试过多，请稍后再试。' });
-  }
   if (!user || !ok) {
     recordLoginAttempt(account, ip, false);
     return res.status(401).json({ error: '账号或密码不正确。' });
@@ -506,8 +520,15 @@ app.post('/api/upload', requireAuth, uploadLimiter, (req, res, next) => {
       fs.rm(req.file.path, { force: true }, () => {});
       return res.status(400).json({ error: '文件类型无法安全确认，请发送常见图片、视频、PDF、ZIP 或 TXT 文件。' });
     }
-    db.prepare(`INSERT INTO uploads(id, stored_name, original_name, mime_type, size, uploaded_by, receiver_id)
-      VALUES(?, ?, ?, ?, ?, ?, ?)`).run(id, req.file.filename, originalName, mimeType, req.file.size, req.user.id, receiverId);
+    try {
+      db.prepare(`INSERT INTO uploads(id, stored_name, original_name, mime_type, size, uploaded_by, receiver_id)
+        VALUES(?, ?, ?, ?, ?, ?, ?)`).run(id, req.file.filename, originalName, mimeType, req.file.size, req.user.id, receiverId);
+    } catch (dbError) {
+      // If metadata persistence fails, remove the just-uploaded bytes to avoid
+      // orphan files accumulating on the persistent disk.
+      fs.rm(req.file.path, { force: true }, () => {});
+      throw dbError;
+    }
     res.status(201).json({ attachment: { id, name: originalName, mimeType, size: req.file.size } });
   });
 });
