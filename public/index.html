@@ -1,1 +1,117 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#2563eb">
+  <meta name="description" content="一个简单的实时聊天与社交应用">
+  <title>微聊 · 聊天社交</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <main id="authView" class="auth-wrap">
+    <section class="auth-card">
+      <div class="brand brand-large"><span class="brand-mark">聊</span><div><h1>微聊</h1><p>让联系更简单</p></div></div>
+      <div class="auth-tabs" role="tablist">
+        <button id="loginTab" class="tab active" type="button">登录</button>
+        <button id="registerTab" class="tab" type="button">注册账号</button>
+      </div>
+      <form id="authForm" autocomplete="on">
+        <label for="username">账号</label>
+        <input id="username" name="username" minlength="3" maxlength="20" autocomplete="username" placeholder="3–20 位字母、数字或 _ -" required>
+        <label for="password">密码</label>
+        <input id="password" name="password" type="password" minlength="8" maxlength="72" autocomplete="current-password" placeholder="至少 8 位" required>
+        <p id="authHint" class="hint">还没有账号？选择“注册账号”即可创建。</p>
+        <button id="authSubmit" class="primary-button full-width" type="submit">登录</button>
+        <p id="authError" class="form-error" aria-live="polite"></p>
+      </form>
+      <p class="auth-footnote">请勿使用你在其他重要网站上的密码。</p>
+    </section>
+  </main>
+
+  <main id="appView" class="app-shell hidden">
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark">聊</span><span class="brand-word">微聊</span></div>
+      <div class="topbar-right">
+        <span class="current-user"><span class="status-dot"></span><span id="currentUsername">—</span></span>
+        <button id="logoutBtn" class="ghost-button" type="button">退出</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="sidebar">
+        <div class="sidebar-heading"><div><p class="eyebrow">SOCIAL</p><h2>联系人</h2></div><button id="refreshBtn" class="icon-button" type="button" title="刷新联系人" aria-label="刷新联系人">↻</button></div>
+        <form id="searchForm" class="search-form">
+          <input id="searchInput" type="search" minlength="2" placeholder="搜索账号，添加好友" aria-label="搜索账号">
+          <button class="search-button" type="submit">搜索</button>
+        </form>
+        <div id="searchResults" class="search-results hidden"></div>
+        <section class="request-section">
+          <button id="requestsToggle" class="section-toggle" type="button"><span>好友申请</span><span id="requestCount" class="count-pill">0</span><span class="toggle-chevron">⌄</span></button>
+          <div id="requestsList" class="requests-list hidden"></div>
+        </section>
+        <section class="friends-section">
+          <div class="list-label">我的好友 <span id="friendCount">0</span></div>
+          <div id="friendsList" class="friends-list"></div>
+          <div id="emptyFriends" class="empty-friends"><span class="empty-icon">＋</span><p>还没有好友</p><small>搜索账号，开始新的对话。</small></div>
+        </section>
+        <div class="sidebar-footer"><span class="secure-symbol">●</span> 点对点实时消息 · 轻量社交</div>
+      </aside>
+
+      <section class="chat-panel">
+        <div id="welcomePanel" class="welcome-panel">
+          <div class="welcome-art"><div class="bubble bubble-back">你好！</div><div class="welcome-circle"><span>聊</span></div><div class="bubble bubble-front">在吗？</div></div>
+          <h2>开启一段对话</h2>
+          <p>从左侧选择好友，或搜索账号添加联系人。</p>
+          <div class="welcome-features"><span>✦ 实时消息</span><span>▧ 文件分享</span><span>◉ 语音 / 视频</span></div>
+        </div>
+
+        <div id="chatView" class="chat-view hidden">
+          <header class="chat-header">
+            <button id="backToContacts" class="icon-button mobile-only" type="button" aria-label="返回联系人">‹</button>
+            <div class="avatar chat-avatar" id="chatAvatar">友</div>
+            <div class="chat-person"><strong id="chatFriendName">好友</strong><small id="chatFriendStatus">微聊联系人</small></div>
+            <div class="chat-header-actions">
+              <button id="audioCallBtn" class="icon-button call-button" type="button" title="语音通话" aria-label="语音通话">☎</button>
+              <button id="videoCallBtn" class="icon-button call-button" type="button" title="视频通话" aria-label="视频通话">▣</button>
+            </div>
+          </header>
+          <div id="messageList" class="message-list" aria-live="polite">
+            <div class="chat-loading">正在加载聊天记录…</div>
+          </div>
+          <div class="composer-wrap">
+            <div class="composer-toolbar">
+              <button id="photoBtn" class="tool-button" type="button" title="发送图片或视频">▧ <span>图片 / 视频</span></button>
+              <button id="fileBtn" class="tool-button" type="button" title="发送文件">↥ <span>文件</span></button>
+              <span class="composer-tip">单个文件最大 50 MB</span>
+              <input id="photoInput" type="file" accept="image/*,video/*" multiple hidden>
+              <input id="fileInput" type="file" multiple hidden>
+            </div>
+            <form id="messageForm" class="message-form">
+              <textarea id="messageInput" rows="1" maxlength="4000" placeholder="输入消息…（Enter 发送，Shift + Enter 换行）" aria-label="消息内容"></textarea>
+              <button id="sendBtn" class="send-button" type="submit" aria-label="发送消息">发送 <span>➤</span></button>
+            </form>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <section id="callScreen" class="call-screen hidden" aria-label="通话窗口">
+    <div class="call-top"><span id="callLiveDot" class="call-live-dot"></span><span id="callTitle">正在通话</span><button id="minimizeCallBtn" class="call-minimize" type="button" aria-label="隐藏通话窗口">—</button></div>
+    <div class="video-stage"><video id="remoteVideo" autoplay playsinline></video><div id="remotePlaceholder" class="remote-placeholder"><div id="remoteCallAvatar" class="avatar call-avatar">友</div><strong id="remoteCallName">好友</strong><span id="callStatus">正在连接…</span></div><video id="localVideo" autoplay muted playsinline></video></div>
+    <div class="call-actions"><button id="toggleMicBtn" class="call-action" type="button" title="静音/取消静音">🎙 <span>麦克风</span></button><button id="toggleCameraBtn" class="call-action" type="button" title="开关摄像头">▣ <span>摄像头</span></button><button id="hangupBtn" class="hangup-button" type="button">☎ <span>挂断</span></button></div>
+  </section>
+
+  <div id="incomingModal" class="modal-backdrop hidden">
+    <section class="incoming-card" role="dialog" aria-modal="true" aria-labelledby="incomingTitle">
+      <div class="incoming-rings"><span>☎</span></div><h2 id="incomingTitle">收到通话邀请</h2><p id="incomingText">好友正在呼叫你</p>
+      <div class="incoming-actions"><button id="rejectCallBtn" class="decline-button" type="button">拒绝</button><button id="acceptCallBtn" class="accept-button" type="button">接听</button></div>
+    </section>
+  </div>
+</body>
+</html>
