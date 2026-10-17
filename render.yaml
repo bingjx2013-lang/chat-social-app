@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: weiliao-chat
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: AUTH_SECRET
+        generateValue: true
+      - key: DATA_DIR
+        value: /var/data
+    disk:
+      name: weiliao-data
+      mountPath: /var/data
+      sizeGB: 1
