@@ -1,0 +1,60 @@
+name: Android APK build
+
+on:
+  push:
+    branches: [mobile-app-stage1]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install app dependencies
+        run: npm install
+      - name: Run security regression tests
+        run: npm test
+      - name: Install Capacitor tooling
+        run: npm install --no-save @capacitor/core @capacitor/cli @capacitor/android
+      - name: Configure Android wrapper
+        run: |
+          cat > capacitor.config.json <<'EOF'
+          {
+            "appId": "com.weiliao.chat",
+            "appName": "微聊",
+            "webDir": "public",
+            "server": {
+              "url": "https://chat-social-app-mobile-test.onrender.com",
+              "cleartext": false
+            },
+            "android": {
+              "allowMixedContent": false
+            }
+          }
+          EOF
+          npx cap add android
+          npx cap sync android
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew assembleDebug
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: weiliao-android-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+          retention-days: 14
