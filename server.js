@@ -711,27 +711,42 @@ app.use((err, _req, res, _next) => {
 });
 
 // Socket.IO authenticates against the same revocable server-side session as HTTP.
+// Same-origin polling GETs may omit the Origin header. If Origin is present, validate
+// it strictly; if absent, allow only Engine.IO polling with a valid same-site session
+// cookie. Browser WebSocket handshakes must always provide Origin.
 io.use((socket, next) => {
   try {
     const origin = String(socket.handshake.headers.origin || '').trim();
     const host = String(socket.handshake.headers.host || '').trim().toLowerCase();
     const forwardedHost = String(socket.handshake.headers['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase();
-    let originUrl;
-    try { originUrl = new URL(origin); } catch { originUrl = null; }
-    const allowedHosts = new Set([host, forwardedHost].filter(Boolean));
-    const allowedProtocol = originUrl && (originUrl.protocol === 'https:' || (!isProduction && originUrl.protocol === 'http:'));
-    if (!originUrl || !allowedProtocol || originUrl.origin !== origin || !allowedHosts.has(originUrl.host.toLowerCase())) {
-      console.warn('socket auth rejected: origin mismatch', JSON.stringify({
-        origin: origin || '(missing)',
-        host: host || '(missing)',
-        forwardedHost: forwardedHost || '(missing)',
-        forwardedProto: String(socket.handshake.headers['x-forwarded-proto'] || '').slice(0, 40)
-      }));
-      return next(new Error('请求来源不受信任。'));
+    const transport = socket.conn?.transport?.name || 'unknown';
+    if (!host) {
+      console.warn('socket auth rejected: missing host header');
+      return next(new Error('请求来源无法验证。'));
+    }
+    if (!origin) {
+      if (transport !== 'polling') {
+        console.warn('socket auth rejected: missing origin on non-polling transport', JSON.stringify({ transport }));
+        return next(new Error('请求来源无法验证。'));
+      }
+    } else {
+      let originUrl;
+      try { originUrl = new URL(origin); } catch { originUrl = null; }
+      const allowedHosts = new Set([host, forwardedHost].filter(Boolean));
+      const allowedProtocol = originUrl && (originUrl.protocol === 'https:' || (!isProduction && originUrl.protocol === 'http:'));
+      if (!originUrl || !allowedProtocol || originUrl.origin !== origin || !allowedHosts.has(originUrl.host.toLowerCase())) {
+        console.warn('socket auth rejected: origin mismatch', JSON.stringify({
+          origin,
+          host,
+          forwardedHost: forwardedHost || '(missing)',
+          transport
+        }));
+        return next(new Error('请求来源不受信任。'));
+      }
     }
     const rawToken = parseCookies(socket.handshake.headers.cookie || '')[SESSION_COOKIE];
     if (!rawToken || rawToken.length > 200) {
-      console.warn('socket auth rejected: missing session cookie');
+      console.warn('socket auth rejected: missing session cookie', JSON.stringify({ transport }));
       return next(new Error('请先登录。'));
     }
     const tokenHash = sha256(rawToken);
@@ -740,7 +755,7 @@ io.use((socket, next) => {
       FROM auth_sessions s JOIN users u ON u.id=s.user_id
       WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?`).get(tokenHash, now);
     if (!session) {
-      console.warn('socket auth rejected: session expired or revoked');
+      console.warn('socket auth rejected: session expired or revoked', JSON.stringify({ transport }));
       return next(new Error('登录状态已失效，请重新登录。'));
     }
     socket.user = { id: session.user_id, username: session.username };
