@@ -30,6 +30,9 @@ db.exec(`
     email TEXT UNIQUE COLLATE NOCASE,
     email_verified_at TEXT,
     public_id TEXT,
+    phone TEXT UNIQUE,
+    country_region TEXT,
+    avatar_url TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -95,6 +98,16 @@ const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(row
 if (!userColumns.has('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
 if (!userColumns.has('email_verified_at')) db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
 if (!userColumns.has('public_id')) db.exec('ALTER TABLE users ADD COLUMN public_id TEXT');
+if (!userColumns.has('phone')) db.exec('ALTER TABLE users ADD COLUMN phone TEXT');
+if (!userColumns.has('country_region')) db.exec('ALTER TABLE users ADD COLUMN country_region TEXT');
+if (!userColumns.has('avatar_url')) db.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT');
+db.exec(`CREATE TABLE IF NOT EXISTS pending_registrations (
+  id TEXT PRIMARY KEY, username TEXT NOT NULL COLLATE NOCASE, password_hash TEXT NOT NULL,
+  phone TEXT NOT NULL, country_region TEXT NOT NULL, captcha_hash TEXT NOT NULL,
+  captcha_expires_at INTEGER NOT NULL, app_code_hash TEXT, app_code_expires_at INTEGER,
+  code_attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_pending_registrations_created ON pending_registrations(created_at);`);
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
 function generatePublicId() {
   const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
@@ -297,30 +310,79 @@ app.get('/api/config', requireAuth, (req, res) => {
   res.json({ iceServers });
 });
 
-app.post('/api/auth/register', authLimiter, async (req, res) => {
+function cleanupPendingRegistrations() {
+  const now = Math.floor(Date.now() / 1000);
+  db.prepare('DELETE FROM pending_registrations WHERE captcha_expires_at<? OR created_at<?').run(now, now - 30 * 60);
+}
+app.post('/api/auth/register/start', authLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
-  const email = String(req.body?.email || '').trim().toLowerCase();
+  const countryRegion = String(req.body?.countryRegion || '').trim().slice(0, 80);
+  const phone = String(req.body?.phone || '').replace(/[\\s()-]/g, '');
   if (!/^[a-zA-Z0-9_-]{3,20}$/.test(username)) return res.status(400).json({ error: '账号需为 3–20 位，只能包含英文字母、数字、下划线和短横线。' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: '密码长度需为 8–72 字节。' });
-  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: '邮箱格式不正确。' });
+  if (!countryRegion) return res.status(400).json({ error: '请填写国家/地区。' });
+  if (!/^\\+[1-9][0-9]{7,14}$/.test(phone)) return res.status(400).json({ error: '手机号请使用国际格式，例如 +14155552671。' });
+  if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(username)) return res.status(409).json({ error: '账号已经被使用。' });
+  if (db.prepare('SELECT 1 FROM users WHERE phone=?').get(phone)) return res.status(409).json({ error: '该手机号已注册。' });
   try {
+    cleanupPendingRegistrations();
     const hash = await bcrypt.hash(password, 12);
-    const publicId = generatePublicId();
-    const result = db.prepare('INSERT INTO users(username, password_hash, email, public_id) VALUES(?, ?, ?, ?)').run(username, hash, email || null, publicId);
-    const user = { id: Number(result.lastInsertRowid), username, publicId };
-    if (email && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
-      await sendVerificationEmail(user.id, email);
-      return res.status(201).json({ verificationRequired: true, message: '账号已创建，请检查邮箱并完成验证。' });
-    }
+    const id = crypto.randomBytes(24).toString('base64url');
+    const x = crypto.randomInt(1, 10), y = crypto.randomInt(1, 10);
+    const now = Math.floor(Date.now() / 1000);
+    db.prepare('INSERT INTO pending_registrations(id,username,password_hash,phone,country_region,captcha_hash,captcha_expires_at,created_at) VALUES(?,?,?,?,?,?,?,?)')
+      .run(id, username, hash, phone, countryRegion, sha256(String(x + y)), now + 5 * 60, now);
+    res.status(201).json({ pendingId: id, captchaQuestion: `人机验证：${x} + ${y} = ?`, expiresInSeconds: 300 });
+  } catch (err) {
+    console.error('registration start failed:', err);
+    res.status(500).json({ error: '无法开始注册，请稍后重试。' });
+  }
+});
+app.post('/api/auth/register/captcha', authLimiter, (req, res) => {
+  const pendingId = String(req.body?.pendingId || ''), answer = String(req.body?.answer || '').trim();
+  if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\\d{1,2}$/.test(answer)) return res.status(400).json({ error: '人机验证信息无效，请重新开始注册。' });
+  const now = Math.floor(Date.now() / 1000);
+  const pending = db.prepare('SELECT * FROM pending_registrations WHERE id=? AND captcha_expires_at>?').get(pendingId, now);
+  if (!pending) return res.status(400).json({ error: '验证已过期，请重新开始注册。' });
+  if (pending.app_code_hash) return res.status(409).json({ error: '验证码已生成，请直接输入验证码。' });
+  if (sha256(answer) !== pending.captcha_hash) return res.status(400).json({ error: '人机验证答案不正确，请重试。' });
+  const code = String(crypto.randomInt(0, 1000000)).padStart(6, '0');
+  db.prepare('UPDATE pending_registrations SET app_code_hash=?, app_code_expires_at=?, code_attempts=0 WHERE id=?').run(sha256(code), now + 5 * 60, pendingId);
+  res.json({ ok: true, message: '人机验证通过，请输入网页显示的应用验证码。', appCode: code, expiresInSeconds: 300 });
+});
+app.post('/api/auth/register/complete', authLimiter, (req, res) => {
+  const pendingId = String(req.body?.pendingId || ''), code = String(req.body?.code || '').trim();
+  if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\\d{6}$/.test(code)) return res.status(400).json({ error: '验证码格式不正确。' });
+  const now = Math.floor(Date.now() / 1000);
+  const pending = db.prepare('SELECT * FROM pending_registrations WHERE id=? AND app_code_expires_at>?').get(pendingId, now);
+  if (!pending) return res.status(400).json({ error: '验证码已过期，请重新开始注册。' });
+  if (pending.code_attempts >= 5) {
+    db.prepare('DELETE FROM pending_registrations WHERE id=?').run(pendingId);
+    return res.status(429).json({ error: '验证码尝试次数过多，请重新注册。' });
+  }
+  if (sha256(code) !== pending.app_code_hash) {
+    db.prepare('UPDATE pending_registrations SET code_attempts=code_attempts+1 WHERE id=?').run(pendingId);
+    return res.status(400).json({ error: '应用验证码不正确，请重新输入。' });
+  }
+  try {
+    const tx = db.transaction(() => {
+      if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE OR phone=?').get(pending.username, pending.phone)) throw new Error('账号或手机号已被注册。');
+      const publicId = generatePublicId();
+      const result = db.prepare('INSERT INTO users(username,password_hash,public_id,phone,country_region) VALUES(?,?,?,?,?)').run(pending.username,pending.password_hash,publicId,pending.phone,pending.country_region);
+      db.prepare('DELETE FROM pending_registrations WHERE id=?').run(pendingId);
+      return { id: Number(result.lastInsertRowid), username: pending.username, publicId };
+    });
+    const user = tx();
     createSession(user, res);
     res.status(201).json({ user });
   } catch (err) {
-    if (String(err.code).includes('SQLITE_CONSTRAINT')) return res.status(409).json({ error: '账号或邮箱已经被使用。' });
-    console.error('register error:', err);
+    if (String(err.code).includes('SQLITE_CONSTRAINT') || /已被注册/.test(err.message)) return res.status(409).json({ error: err.message || '账号或手机号已被注册。' });
+    console.error('registration complete failed:', err);
     res.status(500).json({ error: '注册失败，请稍后重试。' });
   }
 });
+app.post('/api/auth/register', authLimiter, (_req, res) => res.status(410).json({ error: '请使用新版注册流程，完成网页人机验证和应用验证码后才能注册。' }));
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
