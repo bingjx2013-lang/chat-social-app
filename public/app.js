@@ -259,15 +259,16 @@ function renderFriends() {
     button.type = 'button';
     button.className = `friend-row${state.selectedFriend && Number(state.selectedFriend.id) === Number(friend.id) ? ' active' : ''}`;
     button.dataset.friendId = String(friend.id);
-    const avatar = document.createElement('span');
+    const avatar = friend.avatarUrl ? document.createElement('img') : document.createElement('span');
     avatar.className = `avatar ${colorClass(friend.id)}`;
-    avatar.textContent = initial(friend.username);
+    if (friend.avatarUrl) { avatar.src = friend.avatarUrl; avatar.alt = friend.username; }
+    else avatar.textContent = initial(friend.username);
     const detail = document.createElement('span');
     detail.className = 'friend-detail';
     const name = document.createElement('span');
     name.className = 'friend-name'; name.textContent = friend.username;
     const preview = document.createElement('span');
-    preview.className = 'friend-preview'; preview.textContent = '点击开始聊天';
+    preview.className = 'friend-preview'; preview.textContent = `微聊 ID：${friend.publicId || '—'}`;
     detail.append(name, preview);
     const status = document.createElement('span'); status.className = 'friend-status'; status.title = '联系人';
     button.append(avatar, detail, status);
@@ -287,10 +288,10 @@ function renderRequests(requests) {
   }
   requests.forEach((request) => {
     const row = document.createElement('div'); row.className = 'request-row';
-    const avatar = document.createElement('span'); avatar.className = `avatar ${colorClass(request.userId)}`; avatar.textContent = initial(request.username);
+    const avatar = request.avatarUrl ? document.createElement('img') : document.createElement('span'); avatar.className = `avatar ${colorClass(request.userId)}`; if (request.avatarUrl) { avatar.src = request.avatarUrl; avatar.alt = request.username; } else avatar.textContent = initial(request.username);
     const info = document.createElement('span'); info.className = 'result-info';
     const name = document.createElement('strong'); name.textContent = request.username;
-    const small = document.createElement('small'); small.textContent = '申请添加你为好友'; info.append(name, small);
+    const small = document.createElement('small'); small.textContent = `微聊 ID：${request.publicId || '—'} · 申请添加你为好友`; info.append(name, small);
     const actions = document.createElement('span'); actions.className = 'request-actions';
     const accept = document.createElement('button'); accept.type = 'button'; accept.className = 'request-accept'; accept.textContent = '接受';
     accept.addEventListener('click', async () => {
@@ -323,7 +324,7 @@ async function searchUsers(event) {
     const caption = document.createElement('div'); caption.className = 'search-caption'; caption.textContent = `搜索结果（${result.users.length}）`; box.append(caption);
     result.users.forEach((user) => {
       const row = document.createElement('div'); row.className = 'result-row';
-      const avatar = document.createElement('span'); avatar.className = `avatar ${colorClass(user.id)}`; avatar.textContent = initial(user.username);
+      const avatar = user.avatarUrl ? document.createElement('img') : document.createElement('span'); avatar.className = `avatar ${colorClass(user.id)}`; if (user.avatarUrl) { avatar.src = user.avatarUrl; avatar.alt = user.username; } else avatar.textContent = initial(user.username);
       const info = document.createElement('span'); info.className = 'result-info';
       const name = document.createElement('strong'); name.textContent = user.username;
       const small = document.createElement('small'); small.textContent = `微聊 ID：${user.publicId || '—'}`; info.append(name, small);
