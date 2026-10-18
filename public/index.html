@@ -5,11 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta name="theme-color" content="#2563eb">
   <meta name="description" content="一个简单的实时聊天与社交应用">
+  <meta name="application-name" content="微聊">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="微聊">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/icon-192.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="/icons/icon-192.svg">
   <title>微聊 · 聊天社交</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/socket.io/socket.io.js" defer></script>
   <script src="/countries.js" defer></script>
   <script src="/app.js" defer></script>
+  <script src="/pwa.js" defer></script>
 </head>
 <body>
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
