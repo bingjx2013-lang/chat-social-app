@@ -713,23 +713,43 @@ app.use((err, _req, res, _next) => {
 // Socket.IO authenticates against the same revocable server-side session as HTTP.
 io.use((socket, next) => {
   try {
-    const origin = socket.handshake.headers.origin;
-    const host = socket.handshake.headers.host;
-    const forwardedProto = String(socket.handshake.headers['x-forwarded-proto'] || '').split(',')[0].trim();
-    const protocol = forwardedProto || (isProduction ? 'https' : 'http');
-    if (!origin || !host || origin !== `${protocol}://${host}`) return next(new Error('请求来源不受信任。'));
+    const origin = String(socket.handshake.headers.origin || '').trim();
+    const host = String(socket.handshake.headers.host || '').trim().toLowerCase();
+    const forwardedHost = String(socket.handshake.headers['x-forwarded-host'] || '').split(',')[0].trim().toLowerCase();
+    let originUrl;
+    try { originUrl = new URL(origin); } catch { originUrl = null; }
+    const allowedHosts = new Set([host, forwardedHost].filter(Boolean));
+    const allowedProtocol = originUrl && (originUrl.protocol === 'https:' || (!isProduction && originUrl.protocol === 'http:'));
+    if (!originUrl || !allowedProtocol || originUrl.origin !== origin || !allowedHosts.has(originUrl.host.toLowerCase())) {
+      console.warn('socket auth rejected: origin mismatch', JSON.stringify({
+        origin: origin || '(missing)',
+        host: host || '(missing)',
+        forwardedHost: forwardedHost || '(missing)',
+        forwardedProto: String(socket.handshake.headers['x-forwarded-proto'] || '').slice(0, 40)
+      }));
+      return next(new Error('请求来源不受信任。'));
+    }
     const rawToken = parseCookies(socket.handshake.headers.cookie || '')[SESSION_COOKIE];
-    if (!rawToken || rawToken.length > 200) return next(new Error('请先登录。'));
+    if (!rawToken || rawToken.length > 200) {
+      console.warn('socket auth rejected: missing session cookie');
+      return next(new Error('请先登录。'));
+    }
     const tokenHash = sha256(rawToken);
     const now = Math.floor(Date.now() / 1000);
     const session = db.prepare(`SELECT s.token_hash, s.user_id, u.username
       FROM auth_sessions s JOIN users u ON u.id=s.user_id
       WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?`).get(tokenHash, now);
-    if (!session) return next(new Error('登录状态已失效，请重新登录。'));
+    if (!session) {
+      console.warn('socket auth rejected: session expired or revoked');
+      return next(new Error('登录状态已失效，请重新登录。'));
+    }
     socket.user = { id: session.user_id, username: session.username };
     socket.sessionHash = tokenHash;
     next();
-  } catch { next(new Error('登录状态已失效，请重新登录。')); }
+  } catch (err) {
+    console.error('socket auth middleware error:', err?.message || 'unknown error');
+    next(new Error('登录状态已失效，请重新登录。'));
+  }
 });
 io.on('connection', (socket) => {
   const me = socket.user;
