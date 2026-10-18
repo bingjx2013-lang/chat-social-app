@@ -53,7 +53,7 @@ async function main() {
     if (options.origin !== null) headers.Origin = options.origin || base;
     if (options.cookie) headers.Cookie = options.cookie;
     let body = options.body;
-    if (options.json && body !== undefined) {
+    if (options.json !== false && body !== undefined) {
       headers['Content-Type'] = 'application/json';
       body = JSON.stringify(body);
     }
