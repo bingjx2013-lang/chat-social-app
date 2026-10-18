@@ -185,6 +185,9 @@ async function startApp() {
       state.user = me.user;
     }
     $('currentUsername').textContent = state.user.username;
+    const ownAvatar = $('currentUserAvatar');
+    if (state.user.avatarUrl) { ownAvatar.src = state.user.avatarUrl; ownAvatar.classList.remove('hidden'); }
+    else { ownAvatar.removeAttribute('src'); ownAvatar.classList.add('hidden'); }
     $('myPublicId').textContent = state.user.publicId || '正在生成…';
     showApp();
     try {
