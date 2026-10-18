@@ -318,11 +318,11 @@ app.post('/api/auth/register/start', authLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   const countryRegion = String(req.body?.countryRegion || '').trim().slice(0, 80);
-  const phone = String(req.body?.phone || '').replace(/[\\s()-]/g, '');
+  const phone = String(req.body?.phone || '').replace(/[\s()-]/g, '');
   if (!/^[a-zA-Z0-9_-]{3,20}$/.test(username)) return res.status(400).json({ error: '账号需为 3–20 位，只能包含英文字母、数字、下划线和短横线。' });
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: '密码长度需为 8–72 字节。' });
   if (!countryRegion) return res.status(400).json({ error: '请填写国家/地区。' });
-  if (!/^\\+[1-9][0-9]{7,14}$/.test(phone)) return res.status(400).json({ error: '手机号请使用国际格式，例如 +14155552671。' });
+  if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) return res.status(400).json({ error: '手机号请使用国际格式，例如 +14155552671。' });
   if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(username)) return res.status(409).json({ error: '账号已经被使用。' });
   if (db.prepare('SELECT 1 FROM users WHERE phone=?').get(phone)) return res.status(409).json({ error: '该手机号已注册。' });
   try {
@@ -341,7 +341,7 @@ app.post('/api/auth/register/start', authLimiter, async (req, res) => {
 });
 app.post('/api/auth/register/captcha', authLimiter, (req, res) => {
   const pendingId = String(req.body?.pendingId || ''), answer = String(req.body?.answer || '').trim();
-  if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\\d{1,2}$/.test(answer)) return res.status(400).json({ error: '人机验证信息无效，请重新开始注册。' });
+  if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\d{1,2}$/.test(answer)) return res.status(400).json({ error: '人机验证信息无效，请重新开始注册。' });
   const now = Math.floor(Date.now() / 1000);
   const pending = db.prepare('SELECT * FROM pending_registrations WHERE id=? AND captcha_expires_at>?').get(pendingId, now);
   if (!pending) return res.status(400).json({ error: '验证已过期，请重新开始注册。' });
@@ -353,7 +353,7 @@ app.post('/api/auth/register/captcha', authLimiter, (req, res) => {
 });
 app.post('/api/auth/register/complete', authLimiter, (req, res) => {
   const pendingId = String(req.body?.pendingId || ''), code = String(req.body?.code || '').trim();
-  if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\\d{6}$/.test(code)) return res.status(400).json({ error: '验证码格式不正确。' });
+  if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\d{6}$/.test(code)) return res.status(400).json({ error: '验证码格式不正确。' });
   const now = Math.floor(Date.now() / 1000);
   const pending = db.prepare('SELECT * FROM pending_registrations WHERE id=? AND app_code_expires_at>?').get(pendingId, now);
   if (!pending) return res.status(400).json({ error: '验证码已过期，请重新开始注册。' });
