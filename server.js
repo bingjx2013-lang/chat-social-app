@@ -425,7 +425,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
   let user = null;
-  if (/^\\d{8}$/.test(username)) {
+  if (/^\d{8}$/.test(username)) {
     user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE public_id=?').get(username);
   } else {
     const usernameMatches = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE username=? COLLATE NOCASE ORDER BY id LIMIT 2').all(username);
