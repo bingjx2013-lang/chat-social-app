@@ -25,7 +25,7 @@ db.pragma('foreign_keys = ON');
 db.exec(`
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    username TEXT NOT NULL COLLATE NOCASE,
     password_hash TEXT NOT NULL,
     email TEXT UNIQUE COLLATE NOCASE,
     email_verified_at TEXT,
@@ -101,6 +101,40 @@ if (!userColumns.has('public_id')) db.exec('ALTER TABLE users ADD COLUMN public_
 if (!userColumns.has('phone')) db.exec('ALTER TABLE users ADD COLUMN phone TEXT');
 if (!userColumns.has('country_region')) db.exec('ALTER TABLE users ADD COLUMN country_region TEXT');
 if (!userColumns.has('avatar_url')) db.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT');
+
+// Remove the legacy case-insensitive UNIQUE constraint on username while preserving user data and foreign-key targets.
+const usernameUnique = db.pragma('index_list(users)').some(index => {
+  if (!index.unique) return false;
+  const quotedName = String(index.name).replace(/"/g, '""');
+  return db.pragma(`index_info("${quotedName}")`).map(column => column.name).join(',') === 'username';
+});
+if (usernameUnique) {
+  db.pragma('foreign_keys = OFF');
+  try {
+    db.transaction(() => {
+      db.exec(`CREATE TABLE users_no_username_unique (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT NOT NULL COLLATE NOCASE,
+        password_hash TEXT NOT NULL,
+        email TEXT UNIQUE COLLATE NOCASE,
+        email_verified_at TEXT,
+        public_id TEXT,
+        phone TEXT UNIQUE,
+        country_region TEXT,
+        avatar_url TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now'))
+      );
+      INSERT INTO users_no_username_unique(id, username, password_hash, email, email_verified_at, public_id, phone, country_region, avatar_url, created_at)
+        SELECT id, username, password_hash, email, email_verified_at, public_id, phone, country_region, avatar_url, created_at FROM users;
+      DROP TABLE users;
+      ALTER TABLE users_no_username_unique RENAME TO users;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL;
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id_unique ON users(public_id);`);
+    })();
+  } finally {
+    db.pragma('foreign_keys = ON');
+  }
+}
 db.exec(`CREATE TABLE IF NOT EXISTS pending_registrations (
   id TEXT PRIMARY KEY, username TEXT NOT NULL COLLATE NOCASE, password_hash TEXT NOT NULL,
   phone TEXT NOT NULL, country_region TEXT NOT NULL, captcha_hash TEXT NOT NULL,
@@ -110,16 +144,14 @@ db.exec(`CREATE TABLE IF NOT EXISTS pending_registrations (
 CREATE INDEX IF NOT EXISTS idx_pending_registrations_created ON pending_registrations(created_at);`);
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
 function generatePublicId() {
-  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
-  for (let attempt = 0; attempt < 20; attempt++) {
-    let value = '';
-    for (let i = 0; i < 8; i++) value += alphabet[crypto.randomInt(alphabet.length)];
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const value = String(crypto.randomInt(10000000, 100000000));
     if (!db.prepare('SELECT 1 FROM users WHERE public_id=?').get(value)) return value;
   }
-  throw new Error('无法生成唯一用户 ID，请重试。');
+  throw new Error('无法生成唯一 8 位数字微聊 ID，请重试。');
 }
 const backfillPublicIds = db.transaction(() => {
-  const rows = db.prepare('SELECT id FROM users WHERE public_id IS NULL OR public_id = ?').all('');
+  const rows = db.prepare("SELECT id FROM users WHERE public_id IS NULL OR public_id = '' OR length(public_id) <> 8 OR public_id GLOB '*[^0-9]*'").all();
   const update = db.prepare('UPDATE users SET public_id=? WHERE id=?');
   for (const row of rows) update.run(generatePublicId(), row.id);
 });
@@ -164,6 +196,8 @@ app.use('/api', (req, res, next) => {
 
 const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 12, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: '尝试次数过多，请 15 分钟后再试。' } });
+const registrationLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 30, standardHeaders: 'draft-8', legacyHeaders: false,
+  message: { error: '注册请求过于频繁，请 15 分钟后再试。' } });
 const uploadLimiter = rateLimit({ windowMs: 60 * 60 * 1000, limit: 60, standardHeaders: 'draft-8', legacyHeaders: false,
   message: { error: '上传次数过多，请稍后再试。' } });
 
@@ -314,7 +348,7 @@ function cleanupPendingRegistrations() {
   const now = Math.floor(Date.now() / 1000);
   db.prepare('DELETE FROM pending_registrations WHERE captcha_expires_at<? OR created_at<?').run(now, now - 30 * 60);
 }
-app.post('/api/auth/register/start', authLimiter, async (req, res) => {
+app.post('/api/auth/register/start', registrationLimiter, async (req, res) => {
   const username = String(req.body?.username || '').trim();
   const password = String(req.body?.password || '');
   const countryRegion = String(req.body?.countryRegion || '').trim().slice(0, 80);
@@ -323,7 +357,6 @@ app.post('/api/auth/register/start', authLimiter, async (req, res) => {
   if (password.length < 8 || Buffer.byteLength(password, 'utf8') > 72) return res.status(400).json({ error: '密码长度需为 8–72 字节。' });
   if (!countryRegion) return res.status(400).json({ error: '请填写国家/地区。' });
   if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) return res.status(400).json({ error: '手机号请使用国际格式，例如 +14155552671。' });
-  if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE').get(username)) return res.status(409).json({ error: '账号已经被使用。' });
   if (db.prepare('SELECT 1 FROM users WHERE phone=?').get(phone)) return res.status(409).json({ error: '该手机号已注册。' });
   try {
     cleanupPendingRegistrations();
@@ -339,7 +372,7 @@ app.post('/api/auth/register/start', authLimiter, async (req, res) => {
     res.status(500).json({ error: '无法开始注册，请稍后重试。' });
   }
 });
-app.post('/api/auth/register/captcha', authLimiter, (req, res) => {
+app.post('/api/auth/register/captcha', registrationLimiter, (req, res) => {
   const pendingId = String(req.body?.pendingId || ''), answer = String(req.body?.answer || '').trim();
   if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\d{1,2}$/.test(answer)) return res.status(400).json({ error: '人机验证信息无效，请重新开始注册。' });
   const now = Math.floor(Date.now() / 1000);
@@ -351,7 +384,7 @@ app.post('/api/auth/register/captcha', authLimiter, (req, res) => {
   db.prepare('UPDATE pending_registrations SET app_code_hash=?, app_code_expires_at=?, code_attempts=0 WHERE id=?').run(sha256(code), now + 5 * 60, pendingId);
   res.json({ ok: true, message: '人机验证通过，请输入网页显示的应用验证码。', appCode: code, expiresInSeconds: 300 });
 });
-app.post('/api/auth/register/complete', authLimiter, (req, res) => {
+app.post('/api/auth/register/complete', registrationLimiter, (req, res) => {
   const pendingId = String(req.body?.pendingId || ''), code = String(req.body?.code || '').trim();
   if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !/^\d{6}$/.test(code)) return res.status(400).json({ error: '验证码格式不正确。' });
   const now = Math.floor(Date.now() / 1000);
@@ -367,7 +400,7 @@ app.post('/api/auth/register/complete', authLimiter, (req, res) => {
   }
   try {
     const tx = db.transaction(() => {
-      if (db.prepare('SELECT 1 FROM users WHERE username=? COLLATE NOCASE OR phone=?').get(pending.username, pending.phone)) throw new Error('账号或手机号已被注册。');
+      if (db.prepare('SELECT 1 FROM users WHERE phone=?').get(pending.phone)) throw new Error('该手机号已注册。');
       const publicId = generatePublicId();
       const result = db.prepare('INSERT INTO users(username,password_hash,public_id,phone,country_region) VALUES(?,?,?,?,?)').run(pending.username,pending.password_hash,publicId,pending.phone,pending.country_region);
       db.prepare('DELETE FROM pending_registrations WHERE id=?').run(pendingId);
@@ -389,10 +422,14 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const account = accountKey(username);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
-  const user = db.prepare(`SELECT id, username, public_id, password_hash, email, email_verified_at FROM users
-    WHERE username = ? COLLATE NOCASE OR public_id = ? COLLATE NOCASE
-    ORDER BY CASE WHEN username = ? COLLATE NOCASE THEN 0 ELSE 1 END LIMIT 1`)
-    .get(username, username, username);
+  let user = null;
+  if (/^\\d{8}$/.test(username)) {
+    user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at FROM users WHERE public_id=?').get(username);
+  } else {
+    const usernameMatches = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at FROM users WHERE username=? COLLATE NOCASE ORDER BY id LIMIT 2').all(username);
+    // Names may repeat. Permit name-based login only when the name identifies exactly one account; otherwise use the unique 8-digit MicroChat ID.
+    if (usernameMatches.length === 1) user = usernameMatches[0];
+  }
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
   if (lock.locked) {
