@@ -29,6 +29,7 @@ db.exec(`
     password_hash TEXT NOT NULL,
     email TEXT UNIQUE COLLATE NOCASE,
     email_verified_at TEXT,
+    public_id TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE TABLE IF NOT EXISTS auth_sessions (
@@ -93,7 +94,24 @@ db.exec(`
 const userColumns = new Set(db.prepare('PRAGMA table_info(users)').all().map(row => row.name));
 if (!userColumns.has('email')) db.exec('ALTER TABLE users ADD COLUMN email TEXT');
 if (!userColumns.has('email_verified_at')) db.exec('ALTER TABLE users ADD COLUMN email_verified_at TEXT');
+if (!userColumns.has('public_id')) db.exec('ALTER TABLE users ADD COLUMN public_id TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
+function generatePublicId() {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_';
+  for (let attempt = 0; attempt < 20; attempt++) {
+    let value = '';
+    for (let i = 0; i < 8; i++) value += alphabet[crypto.randomInt(alphabet.length)];
+    if (!db.prepare('SELECT 1 FROM users WHERE public_id=?').get(value)) return value;
+  }
+  throw new Error('无法生成唯一用户 ID，请重试。');
+}
+const backfillPublicIds = db.transaction(() => {
+  const rows = db.prepare('SELECT id FROM users WHERE public_id IS NULL OR public_id = ?').all('');
+  const update = db.prepare('UPDATE users SET public_id=? WHERE id=?');
+  for (const row of rows) update.run(generatePublicId(), row.id);
+});
+backfillPublicIds();
+db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id_unique ON users(public_id)');
 
 const app = express();
 const server = http.createServer(app);
@@ -221,7 +239,7 @@ function getSession(req) {
   if (!rawToken || rawToken.length > 200) return null;
   const tokenHash = sha256(rawToken);
   const now = Math.floor(Date.now() / 1000);
-  const session = db.prepare(`SELECT s.token_hash, s.user_id, u.username
+  const session = db.prepare(`SELECT s.token_hash, s.user_id, u.username, u.public_id
     FROM auth_sessions s JOIN users u ON u.id=s.user_id
     WHERE s.token_hash=? AND s.revoked_at IS NULL AND s.expires_at>?`).get(tokenHash, now);
   return session || null;
@@ -230,7 +248,7 @@ function requireAuth(req, res, next) {
   const session = getSession(req);
   if (!session) return res.status(401).json({ error: '登录状态已失效，请重新登录。' });
   req.authSessionHash = session.token_hash;
-  req.user = { id: session.user_id, username: session.username };
+  req.user = { id: session.user_id, username: session.username, publicId: session.public_id };
   next();
 }
 function areFriends(a, b) {
@@ -288,8 +306,9 @@ app.post('/api/auth/register', authLimiter, async (req, res) => {
   if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({ error: '邮箱格式不正确。' });
   try {
     const hash = await bcrypt.hash(password, 12);
-    const result = db.prepare('INSERT INTO users(username, password_hash, email) VALUES(?, ?, ?)').run(username, hash, email || null);
-    const user = { id: Number(result.lastInsertRowid), username };
+    const publicId = generatePublicId();
+    const result = db.prepare('INSERT INTO users(username, password_hash, email, public_id) VALUES(?, ?, ?, ?)').run(username, hash, email || null, publicId);
+    const user = { id: Number(result.lastInsertRowid), username, publicId };
     if (email && process.env.REQUIRE_EMAIL_VERIFICATION === 'true') {
       await sendVerificationEmail(user.id, email);
       return res.status(201).json({ verificationRequired: true, message: '账号已创建，请检查邮箱并完成验证。' });
@@ -308,7 +327,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const account = accountKey(username);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
-  const user = db.prepare('SELECT id, username, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
+  const user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
   if (lock.locked) {
@@ -325,7 +344,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   }
   recordLoginAttempt(account, ip, true);
   createSession(user, res);
-  res.json({ user: { id: user.id, username: user.username } });
+  res.json({ user: { id: user.id, username: user.username, publicId: user.public_id } });
 });
 app.post('/api/auth/logout', (req, res) => {
   const rawToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
@@ -395,14 +414,15 @@ app.get('/api/me', requireAuth, (req, res) => {
 app.get('/api/users/search', requireAuth, (req, res) => {
   const q = String(req.query.q || '').trim().replace(/[\\%_]/g, '');
   if (q.length < 2) return res.json({ users: [] });
-  const rows = db.prepare(`SELECT u.id, u.username,
+  const rows = db.prepare(`SELECT u.id, u.username, u.public_id,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='accepted' AND
       ((f.from_user=? AND f.to_user=u.id) OR (f.from_user=u.id AND f.to_user=?))) AS isFriend,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='pending' AND f.from_user=? AND f.to_user=u.id) AS outgoingPending,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='pending' AND f.from_user=u.id AND f.to_user=?) AS incomingPending
-    FROM users u WHERE u.id <> ? AND u.username LIKE ? COLLATE NOCASE ORDER BY u.username LIMIT 25`)
-    .all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, `%${q}%`);
-  res.json({ users: rows.map(r => ({ id: r.id, username: r.username, isFriend: !!r.isFriend,
+    FROM users u WHERE u.id <> ? AND (u.username LIKE ? COLLATE NOCASE OR u.public_id LIKE ? COLLATE NOCASE)
+    ORDER BY CASE WHEN u.public_id = ? COLLATE NOCASE THEN 0 ELSE 1 END, u.username LIMIT 25`)
+    .all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, '%' + q + '%', q + '%', q);
+  res.json({ users: rows.map(r => ({ id: r.id, username: r.username, publicId: r.public_id, isFriend: !!r.isFriend,
     outgoingPending: !!r.outgoingPending, incomingPending: !!r.incomingPending })) });
 });
 app.post('/api/friends/request', requireAuth, (req, res) => {
