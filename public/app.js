@@ -76,10 +76,10 @@ function setAuthMode(mode) {
   $('authSubmit').textContent = registering ? '创建账号' : '登录';
   $('usernameLabel').textContent = registering ? '账号' : '账号 / 微聊 ID';
   $('username').placeholder = registering ? '输入账号' : '输入用户名或 8 位微聊 ID';
-  $('authHint').textContent = registering ? '账号仅支持英文、数字、下划线和短横线。密码至少 8 位。邮箱可选；站点启用邮箱验证后，需完成验证才能登录。' : '还没有账号？选择“注册账号”即可创建。';
-  $('emailLabel').hidden = !registering;
-  $('email').hidden = !registering;
-  $('email').required = false;
+  $('authHint').textContent = registering ? '注册需填写国家/地区和国际格式手机号。人机验证通过后，网页会显示应用验证码。' : '还没有账号？选择“注册账号”即可创建。';
+  $('countryRegionLabel').hidden = !registering; $('countryRegion').hidden = !registering; $('countryRegion').required = registering;
+  $('phoneLabel').hidden = !registering; $('phone').hidden = !registering; $('phone').required = registering;
+  $('emailLabel').hidden = true; $('email').hidden = true; $('email').required = false;
   $('password').autocomplete = registering ? 'new-password' : 'current-password';
   $('authError').textContent = '';
 }
@@ -92,30 +92,38 @@ function showApp() {
   $('authView').classList.add('hidden');
   $('appView').classList.remove('hidden');
 }
+let pendingRegistrationId = '', registrationAppCodeIssued = false;
 async function handleAuth(event) {
-  event.preventDefault();
-  const button = $('authSubmit');
-  button.disabled = true;
-  $('authError').textContent = '';
+  event.preventDefault(); const button = $('authSubmit'); button.disabled = true; $('authError').textContent = '';
   try {
-    const username = $('username').value.trim();
-    const password = $('password').value;
-    const endpoint = state.authMode === 'register' ? '/api/auth/register' : '/api/auth/login';
-    const payload = { username, password };
-    if (state.authMode === 'register') payload.email = $('email').value.trim();
-    const result = await api(endpoint, { method: 'POST', body: JSON.stringify(payload) });
-    if (result.verificationRequired) {
-      $('authError').textContent = result.message || '请检查邮箱并完成验证。';
-      return;
+    const username = $('username').value.trim(), password = $('password').value;
+    if (state.authMode === 'register') {
+      const result = await api('/api/auth/register/start', {method:'POST',body:JSON.stringify({username,password,countryRegion:$('countryRegion').value.trim(),phone:$('phone').value.trim()})});
+      pendingRegistrationId=result.pendingId; registrationAppCodeIssued=false;
+      $('captchaQuestion').textContent=result.captchaQuestion; $('captchaAnswer').value=''; $('captchaAnswer').hidden=false;
+      $('appCodeDisplay').hidden=true; $('appCodeNotice').hidden=true; $('appCodeLabel').hidden=true; $('appCodeInput').hidden=true; $('appCodeInput').value='';
+      $('completeRegistrationBtn').disabled=true; $('captchaVerifyBtn').hidden=false; $('registrationVerifyError').textContent='';
+      $('registrationVerifyModal').classList.remove('hidden'); $('captchaAnswer').focus(); return;
     }
-    state.user = result.user;
-    $('password').value = '';
-    await startApp();
-  } catch (err) {
-    $('authError').textContent = err.message;
-  } finally {
-    button.disabled = false;
-  }
+    const result=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+    state.user=result.user; $('password').value=''; await startApp();
+  } catch(err) { $('authError').textContent=err.message; } finally { button.disabled=false; }
+}
+async function verifyRegistrationHuman() {
+  if(!pendingRegistrationId)return; const button=$('captchaVerifyBtn'); button.disabled=true; $('registrationVerifyError').textContent='';
+  try {
+    const result=await api('/api/auth/register/captcha',{method:'POST',body:JSON.stringify({pendingId:pendingRegistrationId,answer:$('captchaAnswer').value.trim()})});
+    registrationAppCodeIssued=true; $('appCodeDisplay').textContent=result.appCode; $('appCodeDisplay').hidden=false; $('appCodeNotice').hidden=false;
+    $('appCodeLabel').hidden=false; $('appCodeInput').hidden=false; $('captchaAnswer').hidden=true; $('captchaVerifyBtn').hidden=true;
+    $('completeRegistrationBtn').disabled=true; $('appCodeInput').focus();
+  } catch(err){$('registrationVerifyError').textContent=err.message;} finally{button.disabled=false;}
+}
+async function completeRegistration() {
+  if(!pendingRegistrationId||!registrationAppCodeIssued)return; const button=$('completeRegistrationBtn');button.disabled=true;$('registrationVerifyError').textContent='';
+  try {
+    const result=await api('/api/auth/register/complete',{method:'POST',body:JSON.stringify({pendingId:pendingRegistrationId,code:$('appCodeInput').value.trim()})});
+    pendingRegistrationId='';registrationAppCodeIssued=false;$('registrationVerifyModal').classList.add('hidden');$('password').value='';state.user=result.user;await startApp();
+  } catch(err){$('registrationVerifyError').textContent=err.message;} finally{button.disabled=false;}
 }
 async function startApp() {
   try {
@@ -662,6 +670,10 @@ $('copyPublicIdBtn').addEventListener('click', async () => {
 $('loginTab').addEventListener('click', () => setAuthMode('login'));
 $('registerTab').addEventListener('click', () => setAuthMode('register'));
 $('authForm').addEventListener('submit', handleAuth);
+$('captchaVerifyBtn').addEventListener('click', verifyRegistrationHuman);
+$('completeRegistrationBtn').addEventListener('click', completeRegistration);
+$('cancelRegistrationBtn').addEventListener('click', () => { $('registrationVerifyModal').classList.add('hidden'); pendingRegistrationId=''; registrationAppCodeIssued=false; });
+$('appCodeInput').addEventListener('input', () => { $('completeRegistrationBtn').disabled = !/^\\d{6}$/.test($('appCodeInput').value.trim()); });
 $('logoutBtn').addEventListener('click', () => logout(true));
 $('sessionsBtn').addEventListener('click', openSessions);
 $('closeSessionsBtn').addEventListener('click', () => $('sessionsModal').classList.add('hidden'));
