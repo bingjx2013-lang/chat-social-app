@@ -180,6 +180,11 @@ app.use(helmet({
   },
   crossOriginEmbedderPolicy: false
 }));
+// Allow microphone/camera access for this same-origin app only. Browsers still require user/system consent.
+app.use((_req, res, next) => {
+  res.setHeader('Permissions-Policy', 'microphone=(self), camera=(self)');
+  next();
+});
 app.use(express.json({ limit: '32kb' }));
 app.use(express.static(path.join(__dirname, 'public'), { extensions: ['html'] }));
 
