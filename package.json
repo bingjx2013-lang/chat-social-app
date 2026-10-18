@@ -16,10 +16,14 @@
     "better-sqlite3": "^12.2.0",
     "dotenv": "^17.2.2",
     "express": "^5.1.0",
-    "express-rate-limit": "^8.1.0",
+    "express-rate-limit": "^8.2.2",
     "helmet": "^8.1.0",
     "multer": "^2.4.0",
     "socket.io": "^4.8.1",
     "nodemailer": "^7.0.5"
+  },
+  "overrides": {
+    "engine.io": "^6.6.7",
+    "socket.io-parser": "^4.2.7"
   }
 }
