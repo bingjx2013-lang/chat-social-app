@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apk:
@@ -51,6 +51,15 @@ jobs:
       - name: Build debug APK
         working-directory: android
         run: ./gradlew assembleDebug
+      - name: Publish direct APK download
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp android/app/build/outputs/apk/debug/app-debug.apk weiliao.apk
+          gh release view v1.0.0 >/dev/null 2>&1 || gh release create v1.0.0 \
+            --title "微聊 Android 测试版 v1.0.0" \
+            --notes "微聊 Android 测试安装包。此 APK 为连接微聊移动测试站点的安装包；安装后需联网使用。"
+          gh release upload v1.0.0 weiliao.apk --clobber
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
