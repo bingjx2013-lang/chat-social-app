@@ -412,7 +412,7 @@ app.get('/api/me', requireAuth, (req, res) => {
 });
 
 app.get('/api/users/search', requireAuth, (req, res) => {
-  const q = String(req.query.q || '').trim().replace(/[\\%_]/g, '');
+  const q = String(req.query.q || '').trim().slice(0, 40).replace(/[\\%]/g, '');
   if (q.length < 2) return res.json({ users: [] });
   const rows = db.prepare(`SELECT u.id, u.username, u.public_id,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='accepted' AND
