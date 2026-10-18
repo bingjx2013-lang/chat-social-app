@@ -68,6 +68,49 @@ async function api(url, options = {}) {
   }
   return body;
 }
+
+const countryList = Array.isArray(window.MICROCHAT_COUNTRIES) ? window.MICROCHAT_COUNTRIES : [];
+const regionNames = (() => { try { return new Intl.DisplayNames([navigator.language || 'zh-CN'], { type: 'region' }); } catch { return null; } })();
+const countryByCode = new Map(countryList.map(item => {
+  let localizedName = item.name;
+  try { localizedName = regionNames && regionNames.of(item.code) || item.name; } catch {}
+  if (!localizedName || localizedName === item.code) localizedName = item.name;
+  const flag = String.fromCodePoint(...item.code.split('').map(ch => 127397 + ch.charCodeAt(0)));
+  return [item.code, { ...item, localizedName, flag }];
+}));
+function initCountryPickers() {
+  const countrySelect = $('countryRegion'), dialSelect = $('countryCallingCode');
+  for (const item of countryByCode.values()) {
+    const label = item.flag + ' ' + item.localizedName;
+    const a = document.createElement('option'); a.value = item.code; a.textContent = label; countrySelect.appendChild(a);
+    const b = document.createElement('option'); b.value = item.code; b.textContent = '+' + item.dial + ' — ' + item.localizedName; dialSelect.appendChild(b);
+  }
+  const browserRegion = (() => { try { return new Intl.Locale(navigator.language).region || ''; } catch { return ''; } })();
+  const initial = countryByCode.has(browserRegion) ? browserRegion : (countryByCode.has('CN') ? 'CN' : 'US');
+  countrySelect.value = initial; dialSelect.value = initial;
+  countrySelect.addEventListener('change', () => { dialSelect.value = countrySelect.value; });
+  dialSelect.addEventListener('change', () => { countrySelect.value = dialSelect.value; });
+}
+function getSelectedCountry() { return countryByCode.get($('countryRegion').value) || null; }
+function composeInternationalPhone(country) {
+  let national = String($('phone').value || '').replace(/\\D/g, '');
+  if (country.code !== 'IT') national = national.replace(/^0+/, '');
+  const phone = '+' + country.dial + national;
+  if (!/^\\+[1-9][0-9]{7,14}$/.test(phone)) throw new Error('手机号格式不正确，请检查国家区号和本地号码。');
+  return phone;
+}
+function resetAvatarChoice() {
+  $('avatarFile').value = ''; $('avatarPreview').src = ''; $('avatarPreview').classList.add('hidden'); $('avatarPreviewDefault').classList.remove('hidden');
+}
+function previewAvatarChoice() {
+  const file = $('avatarFile').files && $('avatarFile').files[0];
+  if (!file) return resetAvatarChoice();
+  if (!/^image\\/(png|jpeg|webp|gif)$/.test(file.type) || file.size > 2 * 1024 * 1024) {
+    $('avatarFile').value = ''; resetAvatarChoice(); $('authError').textContent = '头像只支持 PNG、JPG、WEBP、GIF，且不能超过 2 MB。'; return;
+  }
+  $('authError').textContent = ''; $('avatarPreview').src = URL.createObjectURL(file); $('avatarPreview').classList.remove('hidden'); $('avatarPreviewDefault').classList.add('hidden');
+}
+
 function setAuthMode(mode) {
   state.authMode = mode;
   const registering = mode === 'register';
@@ -75,10 +118,12 @@ function setAuthMode(mode) {
   $('registerTab').classList.toggle('active', registering);
   $('authSubmit').textContent = registering ? '创建账号' : '登录';
   $('usernameLabel').textContent = registering ? '账号' : '账号 / 微聊 ID';
-  $('username').placeholder = registering ? '输入账号' : '输入用户名或 8 位微聊 ID';
+  $('username').placeholder = registering ? '输入账号名称（可重复）' : '输入用户名或 8 位数字微聊 ID';
   $('authHint').textContent = registering ? '注册需填写国家/地区和国际格式手机号。人机验证通过后，网页会显示应用验证码。' : '还没有账号？选择“注册账号”即可创建。';
   $('countryRegionLabel').hidden = !registering; $('countryRegion').hidden = !registering; $('countryRegion').required = registering;
+  $('countryCallingCodeLabel').hidden = !registering; $('countryCallingCode').hidden = !registering; $('countryCallingCode').required = registering;
   $('phoneLabel').hidden = !registering; $('phone').hidden = !registering; $('phone').required = registering;
+  $('avatarLabel').hidden = !registering; $('avatarFile').hidden = !registering; $('avatarChoice').hidden = !registering;
   $('emailLabel').hidden = true; $('email').hidden = true; $('email').required = false;
   $('password').autocomplete = registering ? 'new-password' : 'current-password';
   $('authError').textContent = '';
@@ -98,8 +143,16 @@ async function handleAuth(event) {
   try {
     const username = $('username').value.trim(), password = $('password').value;
     if (state.authMode === 'register') {
-      const result = await api('/api/auth/register/start', {method:'POST',body:JSON.stringify({username,password,countryRegion:$('countryRegion').value.trim(),phone:$('phone').value.trim()})});
+      const selectedCountry = getSelectedCountry();
+      if (!selectedCountry) throw new Error('请从完整国家/地区列表中选择国家。');
+      const fullPhone = composeInternationalPhone(selectedCountry);
+      const result = await api('/api/auth/register/start', {method:'POST',body:JSON.stringify({username,password,countryRegion:selectedCountry.localizedName,phone:fullPhone})});
       pendingRegistrationId=result.pendingId; registrationAppCodeIssued=false;
+      const avatarFile = $('avatarFile').files && $('avatarFile').files[0];
+      if (avatarFile) {
+        const avatarForm = new FormData(); avatarForm.append('pendingId', pendingRegistrationId); avatarForm.append('avatar', avatarFile);
+        await api('/api/auth/register/avatar', {method:'POST',body:avatarForm});
+      }
       $('captchaQuestion').textContent=result.captchaQuestion; $('captchaAnswer').value=''; $('captchaAnswer').hidden=false;
       $('appCodeDisplay').hidden=true; $('appCodeNotice').hidden=true; $('appCodeLabel').hidden=true; $('appCodeInput').hidden=true; $('appCodeInput').value='';
       $('completeRegistrationBtn').disabled=true; $('captchaVerifyBtn').hidden=false; $('registrationVerifyError').textContent='';
@@ -667,6 +720,9 @@ $('copyPublicIdBtn').addEventListener('click', async () => {
     toast(copied ? '微聊 ID 已复制。' : `你的微聊 ID：${publicId}`);
   }
 });
+initCountryPickers();
+$('avatarFile').addEventListener('change', previewAvatarChoice);
+$('resetAvatarBtn').addEventListener('click', resetAvatarChoice);
 $('loginTab').addEventListener('click', () => setAuthMode('login'));
 $('registerTab').addEventListener('click', () => setAuthMode('register'));
 $('authForm').addEventListener('submit', handleAuth);
