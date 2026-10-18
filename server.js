@@ -327,7 +327,10 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const account = accountKey(username);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
-  const user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at FROM users WHERE username = ? COLLATE NOCASE').get(username);
+  const user = db.prepare(`SELECT id, username, public_id, password_hash, email, email_verified_at FROM users
+    WHERE username = ? COLLATE NOCASE OR public_id = ? COLLATE NOCASE
+    ORDER BY CASE WHEN username = ? COLLATE NOCASE THEN 0 ELSE 1 END LIMIT 1`)
+    .get(username, username, username);
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
   if (lock.locked) {
