@@ -412,16 +412,17 @@ app.get('/api/me', requireAuth, (req, res) => {
 });
 
 app.get('/api/users/search', requireAuth, (req, res) => {
-  const q = String(req.query.q || '').trim().slice(0, 40).replace(/[\\%]/g, '');
+  // Search terms are bound as SQL parameters and matched with instr(), so '%' and '_' in a public ID are literal characters, not LIKE wildcards.
+  const q = String(req.query.q || '').trim().slice(0, 40);
   if (q.length < 2) return res.json({ users: [] });
   const rows = db.prepare(`SELECT u.id, u.username, u.public_id,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='accepted' AND
       ((f.from_user=? AND f.to_user=u.id) OR (f.from_user=u.id AND f.to_user=?))) AS isFriend,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='pending' AND f.from_user=? AND f.to_user=u.id) AS outgoingPending,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='pending' AND f.from_user=u.id AND f.to_user=?) AS incomingPending
-    FROM users u WHERE u.id <> ? AND (u.username LIKE ? COLLATE NOCASE OR u.public_id LIKE ? COLLATE NOCASE)
+    FROM users u WHERE u.id <> ? AND (instr(lower(u.username), lower(?)) > 0 OR instr(upper(u.public_id), upper(?)) = 1)
     ORDER BY CASE WHEN u.public_id = ? COLLATE NOCASE THEN 0 ELSE 1 END, u.username LIMIT 25`)
-    .all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, '%' + q + '%', q + '%', q);
+    .all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, q, q, q);
   res.json({ users: rows.map(r => ({ id: r.id, username: r.username, publicId: r.public_id, isFriend: !!r.isFriend,
     outgoingPending: !!r.outgoingPending, incomingPending: !!r.incomingPending })) });
 });
