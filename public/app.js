@@ -673,7 +673,7 @@ $('authForm').addEventListener('submit', handleAuth);
 $('captchaVerifyBtn').addEventListener('click', verifyRegistrationHuman);
 $('completeRegistrationBtn').addEventListener('click', completeRegistration);
 $('cancelRegistrationBtn').addEventListener('click', () => { $('registrationVerifyModal').classList.add('hidden'); pendingRegistrationId=''; registrationAppCodeIssued=false; });
-$('appCodeInput').addEventListener('input', () => { $('completeRegistrationBtn').disabled = !/^\\d{6}$/.test($('appCodeInput').value.trim()); });
+$('appCodeInput').addEventListener('input', () => { $('completeRegistrationBtn').disabled = !/^\d{6}$/.test($('appCodeInput').value.trim()); });
 $('logoutBtn').addEventListener('click', () => logout(true));
 $('sessionsBtn').addEventListener('click', openSessions);
 $('closeSessionsBtn').addEventListener('click', () => $('sessionsModal').classList.add('hidden'));
