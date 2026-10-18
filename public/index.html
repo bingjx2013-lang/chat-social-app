@@ -22,8 +22,8 @@
         <button id="registerTab" class="tab" type="button">注册账号</button>
       </div>
       <form id="authForm" autocomplete="on">
-        <label id="usernameLabel" for="username">账号 / 微聊 ID</label>
-        <input id="username" name="username" minlength="3" maxlength="20" autocomplete="username" placeholder="输入用户名或 8 位数字微聊 ID" required>
+        <label id="usernameLabel" for="username">8 位数字微聊 ID</label>
+        <input id="username" name="username" minlength="8" maxlength="8" inputmode="numeric" autocomplete="off" placeholder="输入 8 位数字微聊 ID" required>
         <label id="countryRegionLabel" for="countryRegion" hidden>国家 / 地区（全球选择）</label>
         <select id="countryRegion" name="countryRegion" autocomplete="country-name" hidden>
           <option value="" selected disabled>请选择国家 / 地区</option>
