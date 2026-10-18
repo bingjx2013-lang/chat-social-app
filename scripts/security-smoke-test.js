@@ -178,7 +178,7 @@ async function main() {
     const socketWithoutOrigin = await socketPollingConnect(alice.cookie, null);
     check('Socket.IO accepts authenticated same-origin polling without Origin header',
       socketWithoutOrigin.openStatus === 200 && socketWithoutOrigin.postStatus === 200 &&
-      socketWithoutOrigin.pollStatus === 200 && /40\\{/.test(socketWithoutOrigin.pollText) &&
+      socketWithoutOrigin.pollStatus === 200 && socketWithoutOrigin.pollText.includes('40{') &&
       !socketWithoutOrigin.pollText.includes('44{'),
       JSON.stringify({ postStatus: socketWithoutOrigin.postStatus, pollText: socketWithoutOrigin.pollText }));
     const socketBadOrigin = await socketPollingConnect(alice.cookie, 'https://attacker.invalid');
