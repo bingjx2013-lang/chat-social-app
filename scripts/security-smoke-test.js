@@ -82,7 +82,7 @@ async function main() {
       method: 'POST', body: { pendingId: started.data.pendingId, code: captcha.data.appCode }
     });
     check('registration complete ' + username, completed.status === 201 && !!completed.cookie, JSON.stringify(completed.data));
-    assert.match(completed.data.user.publicId, /^\\d{8}$/);
+    assert.match(completed.data.user.publicId, /^\d{8}$/);
     return { username, id: completed.data.user.id, publicId: completed.data.user.publicId, cookie: completed.cookie, phone: '+1415555' + phoneSuffix };
   };
 
@@ -106,11 +106,31 @@ async function main() {
     const sameName = await register(bob.username.toUpperCase(), '104');
     check('duplicate usernames allowed with distinct numeric IDs',
       sameName.username.toLowerCase() === bob.username.toLowerCase() &&
-      sameName.publicId !== bob.publicId && /^\\d{8}$/.test(sameName.publicId));
+      sameName.publicId !== bob.publicId && /^\d{8}$/.test(sameName.publicId));
     const ambiguousNameLogin = await request('/api/auth/login', {
       method: 'POST', body: { username: bob.username, password: 'Test-Password-2026!' }
     });
     check('ambiguous duplicate username requires MicroChat ID', ambiguousNameLogin.status === 401);
+    const avatarStart = await request('/api/auth/register/start', {
+      method: 'POST', body: { username: 'avatar_' + suffix, password: 'Test-Password-2026!', countryRegion: 'United States', phone: '+1415555105' }
+    });
+    check('avatar test registration starts', avatarStart.status === 201 && !!avatarStart.data.pendingId);
+    const avatarForm = new FormData();
+    avatarForm.append('pendingId', avatarStart.data.pendingId);
+    avatarForm.append('avatar', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a47sAAAAASUVORK5CYII=', 'base64')], { type: 'image/png' }), 'avatar.png');
+    const avatarUpload = await request('/api/auth/register/avatar', { method: 'POST', body: avatarForm, json: false });
+    check('optional registration avatar upload validated', avatarUpload.status === 201 && /^\/api\/avatars\/[0-9a-f-]{36}$/i.test(avatarUpload.data.avatarUrl || ''));
+    const avatarParts = avatarStart.data.captchaQuestion.match(/(\d+) \+ (\d+)/);
+    const avatarCaptcha = await request('/api/auth/register/captcha', {
+      method: 'POST', body: { pendingId: avatarStart.data.pendingId, answer: String(Number(avatarParts[1]) + Number(avatarParts[2])) }
+    });
+    const avatarComplete = await request('/api/auth/register/complete', {
+      method: 'POST', body: { pendingId: avatarStart.data.pendingId, code: avatarCaptcha.data.appCode }
+    });
+    check('uploaded avatar saved on registration', avatarComplete.status === 201 && avatarComplete.data.user.avatarUrl === avatarUpload.data.avatarUrl);
+    const avatarFetch = await request(avatarUpload.data.avatarUrl, { cookie: avatarComplete.cookie });
+    check('saved avatar can be fetched only after login', avatarFetch.status === 200 && (avatarFetch.headers.get('content-type') || '').includes('image/png'));
+
     const duplicatePhone = await request('/api/auth/register/start', {
       method: 'POST', body: { username: 'qd_' + suffix, password: 'Test-Password-2026!', countryRegion: 'United States', phone: alice.phone }
     });
