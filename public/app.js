@@ -93,10 +93,10 @@ function initCountryPickers() {
 }
 function getSelectedCountry() { return countryByCode.get($('countryRegion').value) || null; }
 function composeInternationalPhone(country) {
-  let national = String($('phone').value || '').replace(/\\D/g, '');
+  let national = String($('phone').value || '').replace(/\D/g, '');
   if (country.code !== 'IT') national = national.replace(/^0+/, '');
   const phone = '+' + country.dial + national;
-  if (!/^\\+[1-9][0-9]{7,14}$/.test(phone)) throw new Error('手机号格式不正确，请检查国家区号和本地号码。');
+  if (!/^\+[1-9][0-9]{7,14}$/.test(phone)) throw new Error('手机号格式不正确，请检查国家区号和本地号码。');
   return phone;
 }
 function resetAvatarChoice() {
@@ -105,7 +105,7 @@ function resetAvatarChoice() {
 function previewAvatarChoice() {
   const file = $('avatarFile').files && $('avatarFile').files[0];
   if (!file) return resetAvatarChoice();
-  if (!/^image\\/(png|jpeg|webp|gif)$/.test(file.type) || file.size > 2 * 1024 * 1024) {
+  if (!/^image\/(png|jpeg|webp|gif)$/.test(file.type) || file.size > 2 * 1024 * 1024) {
     $('avatarFile').value = ''; resetAvatarChoice(); $('authError').textContent = '头像只支持 PNG、JPG、WEBP、GIF，且不能超过 2 MB。'; return;
   }
   $('authError').textContent = ''; $('avatarPreview').src = URL.createObjectURL(file); $('avatarPreview').classList.remove('hidden'); $('avatarPreviewDefault').classList.add('hidden');
