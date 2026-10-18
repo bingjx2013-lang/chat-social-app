@@ -418,19 +418,14 @@ app.post('/api/auth/register/complete', registrationLimiter, (req, res) => {
 });
 app.post('/api/auth/register', authLimiter, (_req, res) => res.status(410).json({ error: '请使用新版注册流程，完成网页人机验证和应用验证码后才能注册。' }));
 app.post('/api/auth/login', authLimiter, async (req, res) => {
-  const username = String(req.body?.username || '').trim();
+  const publicId = String(req.body?.publicId || '').trim();
   const password = String(req.body?.password || '');
-  const account = accountKey(username);
+  const account = accountKey(publicId);
   const ip = clientIpKey(req);
   const lock = loginLockStatus(account, ip);
-  let user = null;
-  if (/^\d{8}$/.test(username)) {
-    user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE public_id=?').get(username);
-  } else {
-    const usernameMatches = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE username=? COLLATE NOCASE ORDER BY id LIMIT 2').all(username);
-    // Names may repeat. Permit name-based login only when the name identifies exactly one account; otherwise use the unique 8-digit MicroChat ID.
-    if (usernameMatches.length === 1) user = usernameMatches[0];
-  }
+  const user = /^\d{8}$/.test(publicId)
+    ? db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE public_id=?').get(publicId)
+    : null;
   const dummyHash = '$2a$12$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy';
   const ok = await bcrypt.compare(password, user ? user.password_hash : dummyHash).catch(() => false);
   if (lock.locked) {
@@ -439,7 +434,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   }
   if (!user || !ok) {
     recordLoginAttempt(account, ip, false);
-    return res.status(401).json({ error: '账号或密码不正确。' });
+    return res.status(401).json({ error: '微聊 ID 或密码不正确。请使用个人资料中的 8 位数字微聊 ID 登录。' });
   }
   if (process.env.REQUIRE_EMAIL_VERIFICATION === 'true' && user.email && !user.email_verified_at) {
     recordLoginAttempt(account, ip, false);
