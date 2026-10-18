@@ -78,6 +78,29 @@ async function main() {
     return { status: response.status, data, headers: response.headers,
       cookie: setCookie ? setCookie.split(';')[0] : null };
   };
+  const socketPollingConnect = async (cookie, origin) => {
+    const headers = {};
+    if (cookie) headers.Cookie = cookie;
+    if (origin) headers.Origin = origin;
+    const endpoint = base + '/socket.io/?EIO=4&transport=polling&t=' + Date.now();
+    const opened = await fetch(endpoint, { headers, signal: AbortSignal.timeout(5000) });
+    const openText = await opened.text();
+    if (!opened.ok || !openText.startsWith('0')) {
+      return { openStatus: opened.status, openText, postStatus: 0, postText: '', pollStatus: 0, pollText: '' };
+    }
+    const sid = JSON.parse(openText.slice(1)).sid;
+    const connectHeaders = { ...headers, 'Content-Type': 'text/plain;charset=UTF-8' };
+    const posted = await fetch(base + '/socket.io/?EIO=4&transport=polling&sid=' + encodeURIComponent(sid), {
+      method: 'POST', headers: connectHeaders, body: '40', signal: AbortSignal.timeout(5000)
+    });
+    const postText = await posted.text();
+    const polled = await fetch(base + '/socket.io/?EIO=4&transport=polling&sid=' + encodeURIComponent(sid), {
+      headers, signal: AbortSignal.timeout(5000)
+    });
+    return { openStatus: opened.status, openText, postStatus: posted.status, postText,
+      pollStatus: polled.status, pollText: await polled.text() };
+  };
+
   const register = async (username, phoneSuffix) => {
     const started = await request('/api/auth/register/start', {
       method: 'POST', body: { username, password: 'Test-Password-2026!', countryRegion: 'United States', phone: '+1415555' + phoneSuffix }
@@ -151,6 +174,23 @@ async function main() {
 
     const me = await request('/api/me', { cookie: alice.cookie });
     check('session persists generated public ID', me.status === 200 && me.data.user.publicId === alice.publicId);
+
+    const socketWithoutOrigin = await socketPollingConnect(alice.cookie, null);
+    check('Socket.IO accepts authenticated same-origin polling without Origin header',
+      socketWithoutOrigin.openStatus === 200 && socketWithoutOrigin.postStatus === 200 &&
+      socketWithoutOrigin.pollStatus === 200 && /40\\{/.test(socketWithoutOrigin.pollText) &&
+      !socketWithoutOrigin.pollText.includes('44{'),
+      JSON.stringify({ postStatus: socketWithoutOrigin.postStatus, pollText: socketWithoutOrigin.pollText }));
+    const socketBadOrigin = await socketPollingConnect(alice.cookie, 'https://attacker.invalid');
+    check('Socket.IO rejects authenticated cross-origin polling handshake',
+      socketBadOrigin.pollStatus === 200 && socketBadOrigin.pollText.includes('44{') &&
+      socketBadOrigin.pollText.includes('请求来源不受信任'),
+      JSON.stringify({ pollStatus: socketBadOrigin.pollStatus, pollText: socketBadOrigin.pollText }));
+    const socketWithoutSession = await socketPollingConnect(null, null);
+    check('Socket.IO rejects polling handshake without a session cookie',
+      socketWithoutSession.pollStatus === 200 && socketWithoutSession.pollText.includes('44{') &&
+      socketWithoutSession.pollText.includes('请先登录'),
+      JSON.stringify({ pollStatus: socketWithoutSession.pollStatus, pollText: socketWithoutSession.pollText }));
 
     const searched = await request('/api/users/search?q=' + encodeURIComponent(alice.publicId), { cookie: bob.cookie });
     check('public ID finds correct user', searched.status === 200 &&
