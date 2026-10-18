@@ -426,9 +426,9 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   const lock = loginLockStatus(account, ip);
   let user = null;
   if (/^\\d{8}$/.test(username)) {
-    user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at FROM users WHERE public_id=?').get(username);
+    user = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE public_id=?').get(username);
   } else {
-    const usernameMatches = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at FROM users WHERE username=? COLLATE NOCASE ORDER BY id LIMIT 2').all(username);
+    const usernameMatches = db.prepare('SELECT id, username, public_id, password_hash, email, email_verified_at, avatar_url FROM users WHERE username=? COLLATE NOCASE ORDER BY id LIMIT 2').all(username);
     // Names may repeat. Permit name-based login only when the name identifies exactly one account; otherwise use the unique 8-digit MicroChat ID.
     if (usernameMatches.length === 1) user = usernameMatches[0];
   }
@@ -448,7 +448,7 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   }
   recordLoginAttempt(account, ip, true);
   createSession(user, res);
-  res.json({ user: { id: user.id, username: user.username, publicId: user.public_id } });
+  res.json({ user: { id: user.id, username: user.username, publicId: user.public_id, avatarUrl: user.avatar_url || null } });
 });
 app.post('/api/auth/logout', (req, res) => {
   const rawToken = parseCookies(req.headers.cookie)[SESSION_COOKIE];
@@ -649,6 +649,19 @@ app.post('/api/auth/register/avatar', registrationLimiter, (req, res, next) => {
     db.prepare('UPDATE pending_registrations SET avatar_url=? WHERE id=?').run(avatarUrl, pendingId);
     res.status(201).json({ ok: true, avatarUrl });
   });
+});
+app.get('/api/avatars/:filename', requireAuth, (req, res) => {
+  const filename = String(req.params.filename || '');
+  if (!/^[0-9a-f-]{36}$/i.test(filename)) return res.status(404).json({ error: '头像不存在。' });
+  const avatarUrl = '/api/avatars/' + filename;
+  if (!db.prepare('SELECT 1 FROM users WHERE avatar_url=?').get(avatarUrl)) return res.status(404).json({ error: '头像不存在。' });
+  const fullPath = path.join(UPLOAD_DIR, filename);
+  if (!fs.existsSync(fullPath)) return res.status(404).json({ error: '头像文件不存在。' });
+  const mimeType = detectSafeMime(fullPath, '', filename);
+  if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mimeType)) return res.status(404).json({ error: '头像文件无效。' });
+  res.setHeader('Content-Type', mimeType);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.sendFile(fullPath);
 });
 app.post('/api/upload', requireAuth, uploadLimiter, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
