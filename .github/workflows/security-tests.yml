@@ -2,7 +2,7 @@ name: Security tests
 
 on:
   push:
-    branches: [security-stage1]
+    branches: [security-stage1, mobile-app-stage1]
   pull_request:
     branches: [main]
   workflow_dispatch:
