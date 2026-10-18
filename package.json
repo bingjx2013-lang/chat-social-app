@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "backup": "node scripts/backup.js"
+    "backup": "node scripts/backup.js",
+    "test": "node scripts/security-smoke-test.js"
   },
   "engines": {
     "node": ">=20"
