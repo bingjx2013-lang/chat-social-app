@@ -124,7 +124,6 @@ function setAuthMode(mode) {
   $('countryCallingCodeLabel').hidden = !registering; $('countryCallingCode').hidden = !registering; $('countryCallingCode').required = registering;
   $('phoneLabel').hidden = !registering; $('phone').hidden = !registering; $('phone').required = registering;
   $('avatarLabel').hidden = !registering; $('avatarFile').hidden = !registering; $('avatarChoice').hidden = !registering;
-  $('emailLabel').hidden = true; $('email').hidden = true; $('email').required = false;
   $('password').autocomplete = registering ? 'new-password' : 'current-password';
   $('authError').textContent = '';
 }
