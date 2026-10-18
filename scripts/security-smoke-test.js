@@ -67,13 +67,23 @@ async function main() {
     return { status: response.status, data, headers: response.headers,
       cookie: setCookie ? setCookie.split(';')[0] : null };
   };
-  const register = async username => {
-    const res = await request('/api/auth/register', {
-      method: 'POST', body: { username, password: 'Test-Password-2026!' }
+  const register = async (username, phoneSuffix) => {
+    const started = await request('/api/auth/register/start', {
+      method: 'POST', body: { username, password: 'Test-Password-2026!', countryRegion: 'United States', phone: '+1415555' + phoneSuffix }
     });
-    check('register ' + username, res.status === 201 && !!res.cookie, JSON.stringify(res.data));
-    assert.match(res.data.user.publicId, /^[A-Za-z0-9_]{8}$/);
-    return { username, id: res.data.user.id, publicId: res.data.user.publicId, cookie: res.cookie };
+    check('registration start ' + username, started.status === 201 && !!started.data.pendingId && !!started.data.captchaQuestion);
+    const parts = started.data.captchaQuestion.match(/(\\d+) \\+ (\\d+)/);
+    check('captcha question format ' + username, !!parts);
+    const captcha = await request('/api/auth/register/captcha', {
+      method: 'POST', body: { pendingId: started.data.pendingId, answer: String(Number(parts[1]) + Number(parts[2])) }
+    });
+    check('human verification ' + username, captcha.status === 200 && /^\\d{6}$/.test(captcha.data.appCode));
+    const completed = await request('/api/auth/register/complete', {
+      method: 'POST', body: { pendingId: started.data.pendingId, code: captcha.data.appCode }
+    });
+    check('registration complete ' + username, completed.status === 201 && !!completed.cookie, JSON.stringify(completed.data));
+    assert.match(completed.data.user.publicId, /^[A-Za-z0-9_]{8}$/);
+    return { username, id: completed.data.user.id, publicId: completed.data.user.publicId, cookie: completed.cookie, phone: '+1415555' + phoneSuffix };
   };
 
   try {
@@ -89,14 +99,20 @@ async function main() {
     check('state-changing request without Origin rejected', missingOrigin.status === 403);
 
     const suffix = crypto.randomBytes(3).toString('hex');
-    const alice = await register('qa_' + suffix);
-    const bob = await register('qb_' + suffix);
-    const charlie = await register('qc_' + suffix);
+    const alice = await register('qa_' + suffix, '101');
+    const bob = await register('qb_' + suffix, '102');
+    const charlie = await register('qc_' + suffix, '103');
 
-    const duplicate = await request('/api/auth/register', {
-      method: 'POST', body: { username: alice.username.toUpperCase(), password: 'Test-Password-2026!' }
+    const duplicate = await request('/api/auth/register/start', {
+      method: 'POST', body: { username: alice.username.toUpperCase(), password: 'Test-Password-2026!', countryRegion: 'United States', phone: '+1415555104' }
     });
     check('case-insensitive duplicate account rejected', duplicate.status === 409);
+    const duplicatePhone = await request('/api/auth/register/start', {
+      method: 'POST', body: { username: 'qd_' + suffix, password: 'Test-Password-2026!', countryRegion: 'United States', phone: alice.phone }
+    });
+    check('duplicate phone rejected', duplicatePhone.status === 409);
+    const legacyRegister = await request('/api/auth/register', { method: 'POST', body: { username: 'legacy_' + suffix, password: 'Test-Password-2026!' } });
+    check('legacy registration endpoint disabled', legacyRegister.status === 410);
 
     const me = await request('/api/me', { cookie: alice.cookie });
     check('session persists generated public ID', me.status === 200 && me.data.user.publicId === alice.publicId);
