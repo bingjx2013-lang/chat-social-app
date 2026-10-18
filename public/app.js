@@ -489,6 +489,14 @@ function onIncomingCall(call) {
   $('incomingText').textContent = `${call.fromUsername || '好友'} 正在呼叫你`;
   $('incomingModal').classList.remove('hidden');
 }
+function isMediaAccessError(error) {
+  return !!error && [
+    'NotAllowedError', 'PermissionDeniedError', 'SecurityError',
+    'NotFoundError', 'DevicesNotFoundError', 'NotReadableError',
+    'TrackStartError', 'AbortError', 'OverconstrainedError',
+    'ConstraintNotSatisfiedError'
+  ].includes(error.name);
+}
 function mediaAccessError(error, mode) {
   const name = error && error.name || '';
   const needsVideo = mode === 'video';
@@ -529,7 +537,7 @@ async function startCall(friend, mode) {
     if (!response.ok) throw new Error(response.error || '呼叫失败。');
     $('callStatus').textContent = '等待对方接听…';
   } catch (err) {
-    toast(err && err.name ? mediaAccessError(err, mode) : (err.message || '无法发起通话。'), 6500);
+    toast(isMediaAccessError(err) ? mediaAccessError(err, mode) : (err.message || '无法发起通话。'), 6500);
     cleanupCall(false);
   }
 }
@@ -651,7 +659,7 @@ async function acceptIncomingCall() {
     if (!response.ok) throw new Error(response.error || '无法接听。');
     $('callStatus').textContent = '已接听，正在连接…';
   } catch (err) {
-    toast(err && err.name ? mediaAccessError(err, state.callMode) : (err.message || '无法接听通话。'), 6500);
+    toast(isMediaAccessError(err) ? mediaAccessError(err, state.callMode) : (err.message || '无法接听通话。'), 6500);
     state.socket?.emit('call:reject', { to: call.from });
     cleanupCall(false);
   }
