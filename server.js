@@ -142,6 +142,8 @@ db.exec(`CREATE TABLE IF NOT EXISTS pending_registrations (
   code_attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_pending_registrations_created ON pending_registrations(created_at);`);
+const pendingRegistrationColumns = new Set(db.prepare('PRAGMA table_info(pending_registrations)').all().map(row => row.name));
+if (!pendingRegistrationColumns.has('avatar_url')) db.exec('ALTER TABLE pending_registrations ADD COLUMN avatar_url TEXT');
 db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL');
 function generatePublicId() {
   for (let attempt = 0; attempt < 100; attempt++) {
@@ -402,9 +404,9 @@ app.post('/api/auth/register/complete', registrationLimiter, (req, res) => {
     const tx = db.transaction(() => {
       if (db.prepare('SELECT 1 FROM users WHERE phone=?').get(pending.phone)) throw new Error('该手机号已注册。');
       const publicId = generatePublicId();
-      const result = db.prepare('INSERT INTO users(username,password_hash,public_id,phone,country_region) VALUES(?,?,?,?,?)').run(pending.username,pending.password_hash,publicId,pending.phone,pending.country_region);
+      const result = db.prepare('INSERT INTO users(username,password_hash,public_id,phone,country_region,avatar_url) VALUES(?,?,?,?,?,?)').run(pending.username,pending.password_hash,publicId,pending.phone,pending.country_region,pending.avatar_url || null);
       db.prepare('DELETE FROM pending_registrations WHERE id=?').run(pendingId);
-      return { id: Number(result.lastInsertRowid), username: pending.username, publicId };
+      return { id: Number(result.lastInsertRowid), username: pending.username, publicId, avatarUrl: pending.avatar_url || null };
     });
     const user = tx();
     createSession(user, res);
@@ -509,8 +511,8 @@ app.get('/api/auth/email-verification/confirm', (req, res) => {
   catch { res.status(409).send('邮箱已被其他账号使用，请联系管理员。'); }
 });
 app.get('/api/me', requireAuth, (req, res) => {
-  const row = db.prepare('SELECT email, email_verified_at FROM users WHERE id=?').get(req.user.id);
-  res.json({ user: { ...req.user, email: row.email, emailVerified: !!row.email_verified_at } });
+  const row = db.prepare('SELECT email, email_verified_at, avatar_url FROM users WHERE id=?').get(req.user.id);
+  res.json({ user: { ...req.user, email: row.email, emailVerified: !!row.email_verified_at, avatarUrl: row.avatar_url || null } });
 });
 
 app.get('/api/users/search', requireAuth, (req, res) => {
@@ -611,6 +613,42 @@ const upload = multer({ storage, limits: { fileSize: 50 * 1024 * 1024, files: 1,
     if (blocked.has(ext)) return cb(new Error('出于安全考虑，不支持发送可执行文件。'));
     cb(null, true);
   }
+});
+
+const avatarUpload = multer({ storage, limits: { fileSize: 2 * 1024 * 1024, files: 1, fields: 1, fieldNestingDepth: 1 },
+  fileFilter: (_req, file, cb) => {
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(String(file.mimetype || '').toLowerCase())) {
+      return cb(new Error('头像只支持 PNG、JPG、WEBP 或 GIF 图片。'));
+    }
+    cb(null, true);
+  }
+});
+app.post('/api/auth/register/avatar', registrationLimiter, (req, res, next) => {
+  avatarUpload.single('avatar')(req, res, (err) => {
+    if (err) return next(err);
+    const pendingId = String(req.body?.pendingId || '');
+    if (!/^[A-Za-z0-9_-]{20,80}$/.test(pendingId) || !req.file) {
+      if (req.file) fs.rm(req.file.path, { force: true }, () => {});
+      return res.status(400).json({ error: '头像上传信息无效，请重新开始注册。' });
+    }
+    const now = Math.floor(Date.now() / 1000);
+    const pending = db.prepare('SELECT id, avatar_url FROM pending_registrations WHERE id=? AND captcha_expires_at>?').get(pendingId, now);
+    if (!pending) {
+      fs.rm(req.file.path, { force: true }, () => {});
+      return res.status(400).json({ error: '注册流程已过期，请重新开始。' });
+    }
+    const mimeType = detectSafeMime(req.file.path, req.file.mimetype, req.file.originalname);
+    if (!['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(mimeType)) {
+      fs.rm(req.file.path, { force: true }, () => {});
+      return res.status(400).json({ error: '文件内容不是受支持的图片格式。' });
+    }
+    if (pending.avatar_url && pending.avatar_url.startsWith('/api/avatars/')) {
+      fs.rm(path.join(UPLOAD_DIR, path.basename(pending.avatar_url)), { force: true }, () => {});
+    }
+    const avatarUrl = '/api/avatars/' + req.file.filename;
+    db.prepare('UPDATE pending_registrations SET avatar_url=? WHERE id=?').run(avatarUrl, pendingId);
+    res.status(201).json({ ok: true, avatarUrl });
+  });
 });
 app.post('/api/upload', requireAuth, uploadLimiter, (req, res, next) => {
   upload.single('file')(req, res, (err) => {
