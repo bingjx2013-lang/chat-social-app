@@ -117,9 +117,13 @@ function setAuthMode(mode) {
   $('loginTab').classList.toggle('active', !registering);
   $('registerTab').classList.toggle('active', registering);
   $('authSubmit').textContent = registering ? '创建账号' : '登录';
-  $('usernameLabel').textContent = registering ? '账号' : '账号 / 微聊 ID';
-  $('username').placeholder = registering ? '输入账号名称（可重复）' : '输入用户名或 8 位数字微聊 ID';
-  $('authHint').textContent = registering ? '注册需填写国家/地区和国际格式手机号。人机验证通过后，网页会显示应用验证码。' : '还没有账号？选择“注册账号”即可创建。';
+  $('usernameLabel').textContent = registering ? '账号名称' : '8 位数字微聊 ID';
+  $('username').placeholder = registering ? '设置账号名称（可重复）' : '输入 8 位数字微聊 ID';
+  $('username').minLength = registering ? 3 : 8;
+  $('username').maxLength = registering ? 20 : 8;
+  $('username').inputMode = registering ? 'text' : 'numeric';
+  $('username').autocomplete = registering ? 'username' : 'off';
+  $('authHint').textContent = registering ? '账号名称可以重复。注册完成后系统会分配唯一的 8 位数字微聊 ID，请用它登录。注册需填写国家/地区和手机号。' : '账号名称可能重复，请使用注册后分配的 8 位数字微聊 ID 登录；可在个人资料中查看或复制。';
   $('countryRegionLabel').hidden = !registering; $('countryRegion').hidden = !registering; $('countryRegion').required = registering;
   $('countryCallingCodeLabel').hidden = !registering; $('countryCallingCode').hidden = !registering; $('countryCallingCode').required = registering;
   $('phoneLabel').hidden = !registering; $('phone').hidden = !registering; $('phone').required = registering;
@@ -157,7 +161,8 @@ async function handleAuth(event) {
       $('completeRegistrationBtn').disabled=true; $('captchaVerifyBtn').hidden=false; $('registrationVerifyError').textContent='';
       $('registrationVerifyModal').classList.remove('hidden'); $('captchaAnswer').focus(); return;
     }
-    const result=await api('/api/auth/login',{method:'POST',body:JSON.stringify({username,password})});
+    if (!/^\d{8}$/.test(username)) throw new Error('请输入 8 位数字微聊 ID，不要使用账号名称登录。');
+    const result=await api('/api/auth/login',{method:'POST',body:JSON.stringify({publicId:username,password})});
     state.user=result.user; $('password').value=''; await startApp();
   } catch(err) { $('authError').textContent=err.message; } finally { button.disabled=false; }
 }
