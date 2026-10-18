@@ -23,8 +23,10 @@
       <form id="authForm" autocomplete="on">
         <label id="usernameLabel" for="username">账号 / 微聊 ID</label>
         <input id="username" name="username" minlength="3" maxlength="20" autocomplete="username" placeholder="输入用户名或 8 位微聊 ID" required>
-        <label id="emailLabel" for="email" hidden>邮箱（选填）</label>
-        <input id="email" name="email" type="email" autocomplete="email" maxlength="254" placeholder="name@example.com" hidden>
+        <label id="countryRegionLabel" for="countryRegion" hidden>国家 / 地区</label>
+        <input id="countryRegion" name="countryRegion" maxlength="80" placeholder="例如：中国、美国" hidden>
+        <label id="phoneLabel" for="phone" hidden>手机号（国际格式）</label>
+        <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="16" placeholder="例如：+14155552671" hidden>
         <label for="password">密码</label>
         <input id="password" name="password" type="password" minlength="8" maxlength="72" autocomplete="current-password" placeholder="至少 8 位" required>
         <p id="authHint" class="hint">还没有账号？选择“注册账号”即可创建。</p>
@@ -111,6 +113,17 @@
     <div class="call-actions"><button id="toggleMicBtn" class="call-action" type="button" title="静音/取消静音">🎙 <span>麦克风</span></button><button id="toggleCameraBtn" class="call-action" type="button" title="开关摄像头">▣ <span>摄像头</span></button><button id="hangupBtn" class="hangup-button" type="button">☎ <span>挂断</span></button></div>
   </section>
 
+  <div id="registrationVerifyModal" class="modal-backdrop hidden">
+    <section class="incoming-card" role="dialog" aria-modal="true" aria-labelledby="registrationVerifyTitle">
+      <h2 id="registrationVerifyTitle">注册安全验证</h2><p id="captchaQuestion">请完成人机验证</p>
+      <label for="captchaAnswer">验证答案</label><input id="captchaAnswer" inputmode="numeric" autocomplete="off" maxlength="2" placeholder="输入答案">
+      <button id="captchaVerifyBtn" class="primary-button full-width" type="button">验证并获取应用验证码</button>
+      <p id="appCodeNotice" class="hint" hidden>请重新输入下方显示的 6 位应用验证码</p><p id="appCodeDisplay" class="app-code-display" hidden></p>
+      <label id="appCodeLabel" for="appCodeInput" hidden>重新输入验证码</label><input id="appCodeInput" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="输入 6 位验证码" hidden>
+      <div class="incoming-actions"><button id="cancelRegistrationBtn" class="decline-button" type="button">取消</button><button id="completeRegistrationBtn" class="accept-button" type="button" disabled>下一步</button></div>
+      <p id="registrationVerifyError" class="form-error" aria-live="polite"></p>
+    </section>
+  </div>
   <div id="sessionsModal" class="modal-backdrop hidden">
     <section class="incoming-card" role="dialog" aria-modal="true" aria-labelledby="sessionsTitle">
       <h2 id="sessionsTitle">登录设备</h2>
