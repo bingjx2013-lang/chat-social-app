@@ -105,11 +105,11 @@ async function main() {
     check('public ID finds correct user', searched.status === 200 &&
       searched.data.users.some(user => user.id === alice.id && user.publicId === alice.publicId));
 
-    const percentSearch = await request('/api/users/search?q=%25', { cookie: bob.cookie });
+    const percentSearch = await request('/api/users/search?q=a%25', { cookie: bob.cookie });
     check('percent is treated literally, not as SQL wildcard', percentSearch.status === 200 && percentSearch.data.users.length === 0);
-    const backslashSearch = await request('/api/users/search?q=%5C', { cookie: bob.cookie });
+    const backslashSearch = await request('/api/users/search?q=' + encodeURIComponent('qa\\'), { cookie: bob.cookie });
     check('backslash search does not break SQL query', backslashSearch.status === 200 && backslashSearch.data.users.length === 0);
-    const underscoreSearch = await request('/api/users/search?q=_', { cookie: bob.cookie });
+    const underscoreSearch = await request('/api/users/search?q=' + encodeURIComponent('qa_'), { cookie: bob.cookie });
     check('underscore remains a searchable literal character', underscoreSearch.status === 200 &&
       underscoreSearch.data.users.some(user => user.username === alice.username));
 
