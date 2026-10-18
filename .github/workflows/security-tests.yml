@@ -1,0 +1,30 @@
+name: Security tests
+
+on:
+  push:
+    branches: [security-stage1]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  security-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install dependencies
+        run: npm install
+      - name: Run security integration tests
+        run: npm test
+      - name: Audit dependencies
+        run: npm audit --audit-level=high
