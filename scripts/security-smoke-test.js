@@ -72,12 +72,12 @@ async function main() {
       method: 'POST', body: { username, password: 'Test-Password-2026!', countryRegion: 'United States', phone: '+1415555' + phoneSuffix }
     });
     check('registration start ' + username, started.status === 201 && !!started.data.pendingId && !!started.data.captchaQuestion);
-    const parts = started.data.captchaQuestion.match(/(\\d+) \\+ (\\d+)/);
+    const parts = started.data.captchaQuestion.match(/(\d+) \+ (\d+)/);
     check('captcha question format ' + username, !!parts);
     const captcha = await request('/api/auth/register/captcha', {
       method: 'POST', body: { pendingId: started.data.pendingId, answer: String(Number(parts[1]) + Number(parts[2])) }
     });
-    check('human verification ' + username, captcha.status === 200 && /^\\d{6}$/.test(captcha.data.appCode));
+    check('human verification ' + username, captcha.status === 200 && /^\d{6}$/.test(captcha.data.appCode));
     const completed = await request('/api/auth/register/complete', {
       method: 'POST', body: { pendingId: started.data.pendingId, code: captcha.data.appCode }
     });
