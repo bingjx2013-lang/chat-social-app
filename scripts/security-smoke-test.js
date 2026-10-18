@@ -82,7 +82,7 @@ async function main() {
       method: 'POST', body: { pendingId: started.data.pendingId, code: captcha.data.appCode }
     });
     check('registration complete ' + username, completed.status === 201 && !!completed.cookie, JSON.stringify(completed.data));
-    assert.match(completed.data.user.publicId, /^[A-Za-z0-9_]{8}$/);
+    assert.match(completed.data.user.publicId, /^\\d{8}$/);
     return { username, id: completed.data.user.id, publicId: completed.data.user.publicId, cookie: completed.cookie, phone: '+1415555' + phoneSuffix };
   };
 
@@ -103,10 +103,14 @@ async function main() {
     const bob = await register('qb_' + suffix, '102');
     const charlie = await register('qc_' + suffix, '103');
 
-    const duplicate = await request('/api/auth/register/start', {
-      method: 'POST', body: { username: alice.username.toUpperCase(), password: 'Test-Password-2026!', countryRegion: 'United States', phone: '+1415555104' }
+    const sameName = await register(bob.username.toUpperCase(), '104');
+    check('duplicate usernames allowed with distinct numeric IDs',
+      sameName.username.toLowerCase() === bob.username.toLowerCase() &&
+      sameName.publicId !== bob.publicId && /^\\d{8}$/.test(sameName.publicId));
+    const ambiguousNameLogin = await request('/api/auth/login', {
+      method: 'POST', body: { username: bob.username, password: 'Test-Password-2026!' }
     });
-    check('case-insensitive duplicate account rejected', duplicate.status === 409);
+    check('ambiguous duplicate username requires MicroChat ID', ambiguousNameLogin.status === 401);
     const duplicatePhone = await request('/api/auth/register/start', {
       method: 'POST', body: { username: 'qd_' + suffix, password: 'Test-Password-2026!', countryRegion: 'United States', phone: alice.phone }
     });
