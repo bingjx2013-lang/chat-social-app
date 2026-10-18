@@ -156,6 +156,14 @@ async function main() {
       method: 'POST', body: { username: alice.username, password: 'Test-Password-2026!' }
     });
     check('valid login succeeds', secondLogin.status === 200 && secondLogin.data.user.publicId === alice.publicId && !!secondLogin.cookie);
+    const idLogin = await request('/api/auth/login', {
+      method: 'POST', body: { username: alice.publicId, password: 'Test-Password-2026!' }
+    });
+    check('login with public ID succeeds', idLogin.status === 200 && idLogin.data.user.publicId === alice.publicId && idLogin.data.user.username === alice.username && !!idLogin.cookie);
+    const wrongIdLogin = await request('/api/auth/login', {
+      method: 'POST', body: { username: alice.publicId, password: 'definitely-wrong-password' }
+    });
+    check('wrong password rejected for public ID login', wrongIdLogin.status === 401);
     const wrongLogin = await request('/api/auth/login', {
       method: 'POST', body: { username: alice.username, password: 'definitely-wrong-password' }
     });
