@@ -489,9 +489,33 @@ function onIncomingCall(call) {
   $('incomingText').textContent = `${call.fromUsername || '好友'} 正在呼叫你`;
   $('incomingModal').classList.remove('hidden');
 }
+function mediaAccessError(error, mode) {
+  const name = error && error.name || '';
+  const needsVideo = mode === 'video';
+  const devices = needsVideo ? '麦克风和摄像头' : '麦克风';
+  if (!window.isSecureContext) {
+    return '当前页面不是安全的 HTTPS 环境，浏览器因此不能调用' + devices + '。请打开微聊的 HTTPS 网站后重试。';
+  }
+  if (name === 'NotAllowedError' || name === 'PermissionDeniedError' || name === 'SecurityError') {
+    return devices + '权限被系统或浏览器拒绝。请在手机系统设置中允许微聊/浏览器使用' + devices +
+      '，并在浏览器的网站设置中允许相应权限，然后关闭页面重新进入再试。';
+  }
+  if (name === 'NotFoundError' || name === 'DevicesNotFoundError') {
+    return '没有找到可用的' + devices + '设备，请检查设备是否存在或已连接。';
+  }
+  if (name === 'NotReadableError' || name === 'TrackStartError' || name === 'AbortError') {
+    return devices + '暂时无法使用，可能正被其他应用占用。请关闭其他通话或相机应用后重试。';
+  }
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError') {
+    return '当前设备不支持所需的视频参数，请切换设备或重试。';
+  }
+  return '无法启用' + devices + '。请检查系统权限、浏览器网站权限，并重试。' +
+    (error && error.message ? '（' + error.message + '）' : '');
+}
 async function startCall(friend, mode) {
   if (!state.socket?.connected) return toast('实时连接尚未就绪，请稍后重试。');
-  if (!navigator.mediaDevices?.getUserMedia) return toast('当前环境不支持音视频设备，请使用 HTTPS 网站或现代浏览器。', 5000);
+  if (!window.isSecureContext) return toast('通话需要安全的 HTTPS 页面，请打开微聊的 HTTPS 网站。', 6000);
+  if (!navigator.mediaDevices?.getUserMedia) return toast('此应用/浏览器未开放音视频设备接口。请更新浏览器，或改用 Chrome 打开微聊 HTTPS 网站。', 6000);
   if (state.callPeer || state.callPending) return toast('你已经有一通进行中的电话。');
   state.callPeer = friend.id;
   state.callMode = mode;
@@ -505,7 +529,7 @@ async function startCall(friend, mode) {
     if (!response.ok) throw new Error(response.error || '呼叫失败。');
     $('callStatus').textContent = '等待对方接听…';
   } catch (err) {
-    toast(err.message || '无法发起通话。', 4500);
+    toast(err && err.name ? mediaAccessError(err, mode) : (err.message || '无法发起通话。'), 6500);
     cleanupCall(false);
   }
 }
@@ -627,7 +651,7 @@ async function acceptIncomingCall() {
     if (!response.ok) throw new Error(response.error || '无法接听。');
     $('callStatus').textContent = '已接听，正在连接…';
   } catch (err) {
-    toast(err.message || '无法接听通话。', 4500);
+    toast(err && err.name ? mediaAccessError(err, state.callMode) : (err.message || '无法接听通话。'), 6500);
     state.socket?.emit('call:reject', { to: call.from });
     cleanupCall(false);
   }
