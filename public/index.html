@@ -8,6 +8,7 @@
   <title>微聊 · 聊天社交</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/socket.io/socket.io.js" defer></script>
+  <script src="/countries.js" defer></script>
   <script src="/app.js" defer></script>
 </head>
 <body>
@@ -22,11 +23,25 @@
       </div>
       <form id="authForm" autocomplete="on">
         <label id="usernameLabel" for="username">账号 / 微聊 ID</label>
-        <input id="username" name="username" minlength="3" maxlength="20" autocomplete="username" placeholder="输入用户名或 8 位微聊 ID" required>
-        <label id="countryRegionLabel" for="countryRegion" hidden>国家 / 地区</label>
-        <input id="countryRegion" name="countryRegion" maxlength="80" placeholder="例如：中国、美国" hidden>
-        <label id="phoneLabel" for="phone" hidden>手机号（国际格式）</label>
-        <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="16" placeholder="例如：+14155552671" hidden>
+        <input id="username" name="username" minlength="3" maxlength="20" autocomplete="username" placeholder="输入用户名或 8 位数字微聊 ID" required>
+        <label id="countryRegionLabel" for="countryRegion" hidden>国家 / 地区（全球选择）</label>
+        <select id="countryRegion" name="countryRegion" autocomplete="country-name" hidden>
+          <option value="" selected disabled>请选择国家 / 地区</option>
+        </select>
+        <label id="countryCallingCodeLabel" for="countryCallingCode" hidden>国际电话区号</label>
+        <select id="countryCallingCode" name="countryCallingCode" hidden>
+          <option value="" selected disabled>请选择国际区号</option>
+        </select>
+        <label id="phoneLabel" for="phone" hidden>手机号（填写本地号码）</label>
+        <input id="phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national" maxlength="24" placeholder="输入本地手机号，不用填写国家区号" hidden>
+        <label id="avatarLabel" for="avatarFile" hidden>头像（可选）</label>
+        <input id="avatarFile" name="avatarFile" type="file" accept="image/png,image/jpeg,image/webp,image/gif" hidden>
+        <div id="avatarChoice" class="avatar-choice" hidden>
+          <div id="avatarPreviewDefault" class="avatar avatar-preview-default">聊</div>
+          <img id="avatarPreview" class="avatar-preview hidden" alt="头像预览">
+          <p class="hint">可上传 JPG、PNG、WEBP 或 GIF 图片（最大 2 MB），也可使用默认头像。</p>
+          <button id="resetAvatarBtn" class="ghost-button" type="button">使用默认头像</button>
+        </div>
         <label for="password">密码</label>
         <input id="password" name="password" type="password" minlength="8" maxlength="72" autocomplete="current-password" placeholder="至少 8 位" required>
         <p id="authHint" class="hint">还没有账号？选择“注册账号”即可创建。</p>
