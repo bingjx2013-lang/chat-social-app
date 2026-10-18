@@ -128,8 +128,7 @@ if (usernameUnique) {
         SELECT id, username, password_hash, email, email_verified_at, public_id, phone, country_region, avatar_url, created_at FROM users;
       DROP TABLE users;
       ALTER TABLE users_no_username_unique RENAME TO users;
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL;
-      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_public_id_unique ON users(public_id);`);
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_unique ON users(email) WHERE email IS NOT NULL;`);
     })();
   } finally {
     db.pragma('foreign_keys = ON');
@@ -519,7 +518,7 @@ app.get('/api/users/search', requireAuth, (req, res) => {
   // Search terms are bound as SQL parameters and matched with instr(), so '%' and '_' in a public ID are literal characters, not LIKE wildcards.
   const q = String(req.query.q || '').trim().slice(0, 40);
   if (q.length < 2) return res.json({ users: [] });
-  const rows = db.prepare(`SELECT u.id, u.username, u.public_id,
+  const rows = db.prepare(`SELECT u.id, u.username, u.public_id, u.avatar_url,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='accepted' AND
       ((f.from_user=? AND f.to_user=u.id) OR (f.from_user=u.id AND f.to_user=?))) AS isFriend,
     EXISTS(SELECT 1 FROM friend_requests f WHERE f.status='pending' AND f.from_user=? AND f.to_user=u.id) AS outgoingPending,
@@ -527,7 +526,7 @@ app.get('/api/users/search', requireAuth, (req, res) => {
     FROM users u WHERE u.id <> ? AND (instr(lower(u.username), lower(?)) > 0 OR instr(upper(u.public_id), upper(?)) = 1)
     ORDER BY CASE WHEN u.public_id = ? COLLATE NOCASE THEN 0 ELSE 1 END, u.username LIMIT 25`)
     .all(req.user.id, req.user.id, req.user.id, req.user.id, req.user.id, q, q, q);
-  res.json({ users: rows.map(r => ({ id: r.id, username: r.username, publicId: r.public_id, isFriend: !!r.isFriend,
+  res.json({ users: rows.map(r => ({ id: r.id, username: r.username, publicId: r.public_id, avatarUrl: r.avatar_url || null, isFriend: !!r.isFriend,
     outgoingPending: !!r.outgoingPending, incomingPending: !!r.incomingPending })) });
 });
 app.post('/api/friends/request', requireAuth, (req, res) => {
@@ -547,7 +546,7 @@ app.post('/api/friends/request', requireAuth, (req, res) => {
   res.json({ ok: true, message: '好友申请已发送。' });
 });
 app.get('/api/friends/requests', requireAuth, (req, res) => {
-  const incoming = db.prepare(`SELECT f.id, f.from_user AS userId, u.username, f.created_at AS createdAt
+  const incoming = db.prepare(`SELECT f.id, f.from_user AS userId, u.username, u.public_id AS publicId, u.avatar_url AS avatarUrl, f.created_at AS createdAt
     FROM friend_requests f JOIN users u ON u.id=f.from_user
     WHERE f.to_user=? AND f.status='pending' ORDER BY f.id DESC`).all(req.user.id);
   res.json({ requests: incoming });
@@ -562,7 +561,7 @@ app.post('/api/friends/requests/:id/respond', requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/friends', requireAuth, (req, res) => {
-  const friends = db.prepare(`SELECT u.id, u.username FROM friend_requests f
+  const friends = db.prepare(`SELECT u.id, u.username, u.public_id AS publicId, u.avatar_url AS avatarUrl FROM friend_requests f
     JOIN users u ON u.id = CASE WHEN f.from_user=? THEN f.to_user ELSE f.from_user END
     WHERE f.status='accepted' AND (f.from_user=? OR f.to_user=?) ORDER BY u.username COLLATE NOCASE`)
     .all(req.user.id, req.user.id, req.user.id);
