@@ -122,6 +122,7 @@ async function startApp() {
       state.user = me.user;
     }
     $('currentUsername').textContent = state.user.username;
+    $('myPublicId').textContent = state.user.publicId || '正在生成…';
     showApp();
     try {
       const config = await api('/api/config');
@@ -260,7 +261,7 @@ async function searchUsers(event) {
       const avatar = document.createElement('span'); avatar.className = `avatar ${colorClass(user.id)}`; avatar.textContent = initial(user.username);
       const info = document.createElement('span'); info.className = 'result-info';
       const name = document.createElement('strong'); name.textContent = user.username;
-      const small = document.createElement('small'); small.textContent = `账号 ID：${user.id}`; info.append(name, small);
+      const small = document.createElement('small'); small.textContent = `微聊 ID：${user.publicId || '—'}`; info.append(name, small);
       const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'mini-action';
       if (user.isFriend) { btn.textContent = '已添加'; btn.disabled = true; }
       else if (user.outgoingPending) { btn.textContent = '已发送'; btn.disabled = true; }
@@ -642,6 +643,20 @@ async function logout(showMessage = true, message = '') {
   if (message) toast(message);
 }
 
+$('copyPublicIdBtn').addEventListener('click', async () => {
+  const publicId = String(state.user?.publicId || '');
+  if (!publicId) return toast('用户 ID 尚未加载，请刷新页面。');
+  try {
+    await navigator.clipboard.writeText(publicId);
+    toast('微聊 ID 已复制。');
+  } catch {
+    const field = document.createElement('textarea');
+    field.value = publicId; field.setAttribute('readonly', ''); field.style.position = 'fixed'; field.style.opacity = '0';
+    document.body.append(field); field.select();
+    const copied = document.execCommand('copy'); field.remove();
+    toast(copied ? '微聊 ID 已复制。' : `你的微聊 ID：${publicId}`);
+  }
+});
 $('loginTab').addEventListener('click', () => setAuthMode('login'));
 $('registerTab').addEventListener('click', () => setAuthMode('register'));
 $('authForm').addEventListener('submit', handleAuth);
