@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const net = require('node:net');
 const crypto = require('node:crypto');
+const Database = require('better-sqlite3');
 
 async function freePort() {
   return new Promise((resolve, reject) => {
@@ -23,6 +24,16 @@ async function main() {
   const port = await freePort();
   const base = 'http://127.0.0.1:' + port;
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'chat-security-test-'));
+  // Emulate the earlier deployed schema so the username-uniqueness migration is exercised.
+  const legacyDb = new Database(path.join(dataDir, 'app.sqlite'));
+  legacyDb.exec(`CREATE TABLE users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    password_hash TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );`);
+  legacyDb.prepare('INSERT INTO users(username,password_hash) VALUES(?,?)').run('legacy_person', 'legacy-test-hash');
+  legacyDb.close();
   const child = spawn(process.execPath, ['server.js'], {
     cwd: path.resolve(__dirname, '..'),
     env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir },
