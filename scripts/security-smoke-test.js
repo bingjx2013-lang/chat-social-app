@@ -243,20 +243,20 @@ async function main() {
     });
     check('executable upload rejected', blockedFile.status === 400);
 
-    const secondLogin = await request('/api/auth/login', {
+    const usernameLogin = await request('/api/auth/login', {
       method: 'POST', body: { username: alice.username, password: 'Test-Password-2026!' }
     });
-    check('valid login succeeds', secondLogin.status === 200 && secondLogin.data.user.publicId === alice.publicId && !!secondLogin.cookie);
+    check('username login rejected; unique ID required', usernameLogin.status === 401);
     const idLogin = await request('/api/auth/login', {
-      method: 'POST', body: { username: alice.publicId, password: 'Test-Password-2026!' }
+      method: 'POST', body: { publicId: alice.publicId, password: 'Test-Password-2026!' }
     });
     check('login with public ID succeeds', idLogin.status === 200 && idLogin.data.user.publicId === alice.publicId && idLogin.data.user.username === alice.username && !!idLogin.cookie);
     const wrongIdLogin = await request('/api/auth/login', {
-      method: 'POST', body: { username: alice.publicId, password: 'definitely-wrong-password' }
+      method: 'POST', body: { publicId: alice.publicId, password: 'definitely-wrong-password' }
     });
     check('wrong password rejected for public ID login', wrongIdLogin.status === 401);
     const wrongLogin = await request('/api/auth/login', {
-      method: 'POST', body: { username: alice.username, password: 'definitely-wrong-password' }
+      method: 'POST', body: { publicId: alice.publicId, password: 'definitely-wrong-password' }
     });
     check('wrong password rejected', wrongLogin.status === 401);
 
@@ -277,7 +277,7 @@ async function main() {
     let rateLimited = false;
     for (let i = 0; i < 14; i++) {
       const attempt = await request('/api/auth/login', {
-        method: 'POST', body: { username: 'unknown_' + suffix, password: 'wrong-password' }
+        method: 'POST', body: { publicId: '00000000', password: 'wrong-password' }
       });
       if (attempt.status === 429) { rateLimited = true; break; }
     }
